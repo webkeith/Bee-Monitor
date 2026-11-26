@@ -1,0 +1,22 @@
+.bee-monitor-cards,.bee-monitor-tools{display:flex;flex-wrap:wrap;gap:16px;margin:16px 0}
+.bee-monitor-card{background:#fff;border:1px solid #c3c4c7;border-radius:4px;padding:4px 16px 12px;flex:1 1 240px;max-width:520px}
+.bee-monitor-card h2{font-size:14px;margin:12px 0 8px}
+.bee-monitor-card-warn{border-left:4px solid #dba617}
+.bee-monitor-sev{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:600;line-height:1.6;color:#fff;background:#646970}
+.bee-monitor-sev-critical{background:#8a1f11}
+.bee-monitor-sev-high{background:#b32d2e}
+.bee-monitor-sev-medium{background:#996800}
+.bee-monitor-sev-low{background:#2c3338}
+.bee-monitor-sev-info{background:#646970}
+.bee-monitor-path{word-break:break-all;white-space:normal}
+.bee-monitor-table td,.bee-monitor-table th{vertical-align:top}
+.bee-monitor-table th:nth-child(2),.bee-monitor-table td:nth-child(2){width:90px}
+.bee-monitor-detail th{width:200px}
+.bee-monitor-evidence dt{font-weight:600;margin-top:6px}
+.bee-monitor-evidence dd{margin:2px 0 0 0}
+.bee-monitor-evidence code{word-break:break-all;white-space:pre-wrap}
+.bee-monitor-warning{color:#b32d2e}
+.bee-monitor-list{list-style:disc;margin-left:20px}
+.bee-monitor-inline{display:inline-block;margin-right:8px}
+.bee-monitor-filter{margin:8px 0;clear:both}
+#bee-monitor-progress{font-weight:600}

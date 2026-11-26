@@ -1,0 +1,11 @@
+* text=auto eol=lf
+/.github         export-ignore
+/.wordpress-org  export-ignore
+/bin             export-ignore
+.distignore      export-ignore
+.gitignore       export-ignore
+.gitattributes   export-ignore
+composer.json    export-ignore
+composer.lock    export-ignore
+phpcs.xml.dist   export-ignore
+README.md        export-ignore
