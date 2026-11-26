@@ -12,12 +12,14 @@ WordPress 6.5+, PHP 7.4+.
 
 ```bash
 wp bee-monitor scan [--rebuild]
+wp bee-monitor cancel
 wp bee-monitor status
 wp bee-monitor findings [--status=open] [--min-severity=low] [--format=table|csv|json]
 wp bee-monitor accept <id>...          # mark expected, accept file into baseline
 wp bee-monitor resolve <id>...
 wp bee-monitor accept-all [--yes]      # after a deployment you performed
 wp bee-monitor deploy-window <minutes> # only critical alerts are immediate during deploys
+wp bee-monitor export [--format=json|csv] [--status=open|all] [--include-personal] [--include-site]
 wp bee-monitor test-email
 wp bee-monitor digest
 ```
@@ -30,6 +32,8 @@ composer run lint       # PHP syntax check
 composer run phpcs      # WordPress Coding Standards + PHP 7.4+ compatibility
 composer run build      # dist/bee-monitor-<version>.zip, excluding files in .distignore
 ```
+
+Icons are Lucide 1.78.0 (ISC). To regenerate `includes/icons-data.php`, download the SVGs listed in that file from the pinned Lucide tag into a folder, then run `php bin/build-icons.php 1.78.0 <folder> && composer run phpcbf`.
 
 Run the official [Plugin Check](https://wordpress.org/plugins/plugin-check/) against the built folder before every release. CI does this on each push.
 

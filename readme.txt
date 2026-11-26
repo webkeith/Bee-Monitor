@@ -1,126 +1,97 @@
 === Bee Monitor ===
 Contributors: keithquinones
-Tags: security, malware, file integrity, monitoring, alerts
+Tags: security, malware, file integrity, monitoring, audit log
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.1.0
+Stable tag: 1.5.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Detects suspicious PHP file changes, core tampering, and risky admin or settings changes, then emails clear, deduplicated alerts. Read-only.
+Detects suspicious PHP file changes, core tampering, and risky admin or settings changes, then emails clear, deduplicated alerts.
 
 == Description ==
 
-Bee Monitor builds a signed baseline of your site's PHP and server configuration files and checks for changes on a schedule. It verifies WordPress core against official checksums, watches privileged accounts, roles, key options, and scheduled tasks, and emails grouped alerts with redacted evidence and next steps.
+Bee Monitor builds a signed baseline of your site's PHP and server configuration files, verifies WordPress core (and optionally WordPress.org plugins) against official checksums, scans for documented backdoor signatures and suspicious patterns, watches users, roles, settings, and scheduled tasks, and emails grouped alerts with redacted evidence and a recommended next step.
 
-Bee Monitor never deletes, quarantines, or modifies files. Every finding is for you to review.
+Bee Monitor never changes files on its own. If you turn on administrator-reviewed repairs, an administrator can repair core or WordPress.org plugin files from official, checksum-verified sources, or quarantine flagged files. Each action needs confirmation, keeps a recoverable copy, and is logged.
 
-= What it detects =
+= Features =
 
-* **Confirmed changes:** core files that differ from official WordPress.org checksums, unknown or missing core files, PHP and server config files added, changed, or deleted since the baseline (core, plugins, themes, must-use plugins, drop-ins, uploads, the WordPress root), wp-config.php and .htaccess changes, new or changed privileged accounts (including ones inserted directly into the database), role and key option changes, and tampering with Bee Monitor itself.
-* **Location rules:** executable PHP in uploads, cache, and temporary folders, and new PHP files in unusual places.
-* **Heuristic indicators (for review, not proof):** web shell and obfuscation patterns, risky server directives, unusual includes in wp-config.php, scheduled tasks or email hooks defined outside plugins and themes, injected scripts in options and posts, failed-login bursts, and privileged logins from new networks.
-
-Each finding shows its basis, severity, and confidence. Legitimate code sometimes matches heuristic patterns.
-
-= Alerts your way =
-
-* Route alerts per recipient: choose categories and the severity that triggers an immediate email; everything else goes to an hourly, daily, or weekly digest at the time you choose.
-* HTML or plain-text emails, a custom From name, From and Reply-To address, a subject label for each site, and a summary mode that leaves code out of emails.
-* Ignore rules for known-noisy paths, read-only access for clients, WordPress Site Health checks, and WP-CLI commands.
+* **File integrity:** added, modified, and missing files in core, plugins, themes, must-use plugins, drop-ins, uploads, and the root. Each result says whether it was verified against official WordPress.org checksums or compared with the local baseline only (unverified).
+* **Malware signatures and patterns:** a versioned local signature set (BM-SIG-###) plus heuristics, with file, line, redacted evidence, severity, and confidence. Matches are leads for review, not proof of infection.
+* **Persistence and configuration checks:** hidden administrators, admin application passwords, runtime prepend files, the file editor, debug exposure, world-writable files, unsupported PHP.
+* **Public page checks (optional):** injected or obfuscated scripts, hidden frames and links, external redirects, search-engine cloaking, and visible errors on your own public pages.
+* **Activity log:** updates, activations, user and role changes, key settings, scans, and Bee Monitor actions, with configurable retention and deletion.
+* **Alerts and reports:** per-recipient routing, digests, JSON/CSV reports that exclude personal data by default, WP-CLI, and Site Health tests.
 
 = Limitations =
 
-No monitoring tool detects every attack. Bee Monitor runs inside WordPress, so an attacker with code execution can disable it or suppress email. Deactivation emails, signed baseline records, scan-gap detection, and an optional external heartbeat make this visible, but cannot prevent it. Requests to standalone PHP files bypass WordPress and need server logs or a firewall. A baseline created on an infected site treats unchanged infected files as normal, so review the first "Baseline created" email carefully. Excluded paths are not checked.
+No tool detects every attack. Signatures and heuristics find known techniques and suspicious patterns; new or heavily disguised malware can be missed, and legitimate code can match. Bee Monitor runs inside WordPress, so code with full access can disable it; deactivation emails, signed baseline records, and the optional heartbeat make that visible. Public page checks see only rendered output, not server files. Bee Monitor does not check blocklist status (that needs third-party services with their own terms); use Google Search Console for that. Theme files and non-WordPress.org plugins are compared with the local baseline only.
 
 == Installation ==
 
-1. Install and activate. On multisite, network-activate it (per-site activation is refused because files are shared).
-2. Go to Bee Monitor > Tools & Status and click **Send test email**.
-3. Click **Run scan now** to create the baseline, then review the "Baseline created" email.
-4. Recommended: add `define( 'BEE_MONITOR_HMAC_KEY', 'a-random-64-character-string' );` to wp-config.php, set a heartbeat URL, and run WP-Cron from a real server cron job.
+1. Install and activate (network-activate on multisite).
+2. In Bee Monitor > Tools & Status, send a test email and run a scan to create the baseline. Review the "Baseline created" email.
+3. Optional: set `BEE_MONITOR_HMAC_KEY` in wp-config.php, a heartbeat URL, and a server cron job.
 
 == External services ==
 
-Bee Monitor connects to these services:
+* **WordPress.org core checksums** (api.wordpress.org), on by default: sends your WordPress version and locale, at most daily.
+* **WordPress.org plugin checksums** (downloads.wordpress.org), off by default: sends a plugin's folder name and version when one of its files changes, at most daily per version.
+* **Official file sources** (core.svn.wordpress.org, plugins.svn.wordpress.org): only when an administrator confirms a repair; requests the one file being repaired.
+* **Heartbeat URL**, off by default: an HTTPS GET to the address you choose after each scan, with no site data.
 
-* **WordPress.org Core Checksums API** (api.wordpress.org). Used to verify WordPress core files. When: during scans, at most once a day per WordPress version (results are cached). Data sent: your WordPress version and locale, the same information WordPress itself sends when checking for updates. You can turn this off under Settings > Integrity and site checks. Service: https://wordpress.org/ — Privacy policy: https://wordpress.org/about/privacy/
-* **Heartbeat URL (optional, off by default).** If you enter a URL, Bee Monitor sends an HTTPS GET request to it after each completed scan, with the user agent "Bee Monitor/version" and no site data. Use any heartbeat monitoring service you choose, for example Healthchecks.io (https://healthchecks.io/, privacy policy: https://healthchecks.io/privacy/). That service's own terms and privacy policy apply.
+WordPress.org privacy policy: https://wordpress.org/about/privacy/
 
-Alerts are sent with your site's own wp_mail() configuration.
+Public page checks request only this site's own pages. Alerts use your site's wp_mail() setup.
 
 == Data stored ==
 
-Bee Monitor stores data in its own database tables and options on your site only:
-
-* File paths and SHA-256 hashes of monitored files.
-* Findings with short, redacted evidence. Key, salt, password, and credential values are replaced with [redacted]; full file contents are never stored or emailed.
-* Alert recipient email addresses, and a hashed record of which alerts were sent to each.
-* For accounts with administrative capabilities: username, masked email address, and roles.
-* For login monitoring: failure counts, masked networks (for example 203.0.113.x), and keyed hashes of attempted usernames and of the networks administrators sign in from.
-
-Closed findings are deleted after the retention period (default 180 days). Bee Monitor suggests text for your privacy policy and supports the WordPress personal data export and erase tools. Uninstalling keeps data unless "Delete all Bee Monitor data on uninstall" is enabled.
+File paths and hashes; findings with redacted evidence (secrets and file contents are never stored); usernames, masked emails, and roles of privileged accounts; masked networks and keyed hashes for login monitoring; alert recipient addresses; the activity log (user IDs, not names; kept 30 days by default); and, only after a confirmed repair or quarantine, the affected file in a protected quarantine folder. Bee Monitor supports WordPress personal data export and erase, and suggests privacy policy text. Data is kept on uninstall unless you choose to delete it.
 
 == Frequently Asked Questions ==
 
-= Does it block or change anything? =
+= Will Bee Monitor delete or change files? =
 
-No. Admins can edit content, settings, and users as usual. Bee Monitor only reports.
+Not by itself. Repairs and quarantine are off by default, available only for specific findings, and always need an administrator's confirmation. Repairs use official files verified against official checksums, back up the current file first, and roll back on failure. Quarantined files can be restored.
 
-= How does it avoid flooding my inbox? =
+= What does "unverified" mean? =
 
-Each finding is emailed once. High and critical findings are sent immediately; lower ones go to a digest. There is an hourly email cap. Core updates are verified against official checksums, and recorded plugin and theme updates are accepted automatically unless the changed files contain suspicious code.
+The file was compared with Bee Monitor's own baseline, not an official source, because none exists (themes, premium and custom plugins). A change is real, but whether it is legitimate needs your review.
 
-= What do Expected and Resolved mean? =
+= How does it avoid alert floods? =
 
-Expected: the change is legitimate. The baseline is updated and that exact finding never alerts again. Resolved: you fixed the problem. If it reappears, you are alerted again once.
-
-= Why does it check the directory above WordPress? =
-
-wp-config.php and prepend files often live there. Bee Monitor only reads PHP and server config files in that one directory (not subdirectories). Turn it off under Settings > Scope and exclusions.
-
-= What if the baseline is deleted or edited? =
-
-You get a critical finding, and scans continue in limited mode until you rebuild the baseline from Bee Monitor > Baseline.
-
-= What if WP-Cron does not run? =
-
-The next scan reports the gap, the digest reports monitor health, and the optional heartbeat service alerts you independently.
-
-= How can I test that alerts work? =
-
-On a staging site, create `wp-content/uploads/bee-monitor-canary.php` containing `<?php echo 'canary';`, then click Run scan now. Expect a critical "Executable PHP file in uploads" email. Delete the file and mark the finding Resolved.
+Each finding is emailed once; lower severities go to a digest; there is an hourly cap; verified core and plugin updates are accepted automatically.
 
 = Can I use WP-CLI? =
 
-Yes: `wp bee-monitor scan`, `status`, `findings`, `accept`, `resolve`, `accept-all`, `deploy-window <minutes>`, `test-email`, and `digest`. Run `wp help bee-monitor` for details. A typical deployment: `wp bee-monitor deploy-window 30`, deploy, `wp bee-monitor scan`, then review and `wp bee-monitor accept-all`.
+Yes: `scan` (`--full`, `--remote`), `cancel`, `status`, `findings`, `accept`, `resolve`, `accept-all`, `deploy-window`, `export`, `activity`, `test-email`, and `digest`.
 
-= Can clients see findings without changing anything? =
+= How do I test alerts? =
 
-Yes. Choose roles under Settings > Tamper detection and data > Read-only access (single sites). Those users see the Findings screen only.
+On staging, create `wp-content/uploads/bee-monitor-canary.php` containing `<?php echo 'canary';` and run a scan. Expect a critical email.
 
-= What are the requirements? =
+== Credits ==
 
-WordPress 6.5+, PHP 7.4+, working email delivery (an SMTP plugin is recommended), and read access to WordPress files. Admin screens require manage_options (manage_network_options on multisite).
+Icons: Lucide (https://lucide.dev), ISC License; see assets/icons/LICENSE-lucide.txt. The bee logo is original artwork made for Bee Monitor and is licensed GPLv2 or later with the plugin.
 
 == Changelog ==
 
-= 1.1.0 =
-* Per-recipient alert routing by category and severity, with per-recipient hourly limits.
-* HTML emails with a plain-text version, sender settings, subject label, and summary evidence mode.
-* Digest at a chosen time, with a new weekly option.
-* Ignore rules, including "Ignore similar findings in this folder".
-* Read-only access for chosen roles, Site Health tests, and WP-CLI commands with a deployment window.
-* Upgrading from 1.0.x keeps your existing recipients and alert threshold.
+= 1.5.0 =
+* Redesigned dashboard: security status, scan controls on the dashboard, key figures, top priorities with verification labels, severity breakdown, and recent activity. New bee logo and admin menu icon, consistent section navigation, and improved empty, running, and error states.
 
-= 1.0.1 =
-* Escaping applied at output on all admin screens.
-* Database table names use prepared identifiers.
-* Added External services and Data stored documentation, privacy policy text, personal data export and erase, and a retention setting for closed findings.
-* Server configuration evidence now shows directives only, never values.
-* Removed CDN domains from the default script allowlist; removed manual translation loading.
-* Scan auto-start links now require a nonce.
+= 1.4.0 =
+* Verification labels on file findings, a versioned signature set, optional public page checks, an activity log with retention, and optional administrator-reviewed repair and quarantine with backups.
+
+= 1.3.0 =
+* Icons, full integrity scan, copy buttons, accessibility improvements.
+
+= 1.2.0 =
+* Overview dashboard, investigation panel, scan cancel, posture checks, plugin checksums, reports.
+
+= 1.1.0 =
+* Alert routing, HTML email, ignore rules, read-only access, Site Health, WP-CLI.
 
 = 1.0.0 =
 * Initial release.

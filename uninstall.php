@@ -22,7 +22,7 @@ if ( ! is_array( $bee_monitor_settings ) || empty( $bee_monitor_settings['delete
 }
 
 global $wpdb;
-foreach ( array( 'baseline', 'findings', 'log', 'deliveries' ) as $bee_monitor_table ) {
+foreach ( array( 'baseline', 'findings', 'log', 'deliveries', 'activity' ) as $bee_monitor_table ) {
 	$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $wpdb->base_prefix . 'bee_monitor_' . $bee_monitor_table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange
 }
 
@@ -32,6 +32,14 @@ if ( is_multisite() ) {
 $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $wpdb->esc_like( 'bee_monitor_' ) . '%' ) );
 
 delete_metadata( 'user', 0, 'bee_monitor_known_networks', '', true );
+
+$bee_monitor_uploads = wp_upload_dir( null, false );
+$bee_monitor_qdir    = trailingslashit( $bee_monitor_uploads['basedir'] ) . 'bee-monitor-quarantine';
+require_once ABSPATH . 'wp-admin/includes/file.php';
+if ( is_dir( $bee_monitor_qdir ) && 'direct' === get_filesystem_method() && WP_Filesystem() ) {
+	global $wp_filesystem;
+	$wp_filesystem->rmdir( $bee_monitor_qdir, true );
+}
 
 $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s", $wpdb->esc_like( '_transient_bee_monitor_' ) . '%', $wpdb->esc_like( '_transient_timeout_bee_monitor_' ) . '%' ) );
 if ( is_multisite() ) {

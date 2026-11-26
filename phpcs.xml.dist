@@ -3,6 +3,9 @@
 	<description>WordPress Coding Standards and PHP 7.4+ compatibility for Bee Monitor.</description>
 	<file>.</file>
 	<exclude-pattern>/vendor/*</exclude-pattern>
+	<!-- Developer CLI tools: not shipped in the plugin zip (.distignore) and not run inside WordPress. -->
+	<exclude-pattern>/bin/*</exclude-pattern>
+	<exclude-pattern>/dist/*</exclude-pattern>
 	<arg name="extensions" value="php"/>
 	<arg value="sp"/>
 	<config name="testVersion" value="7.4-"/>

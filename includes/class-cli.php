@@ -28,9 +28,16 @@ final class CLI {
 	 * [--rebuild]
 	 * : Replace the baseline with the files as they are now. Only use this on a verified clean site.
 	 *
+	 * [--remote]
+	 * : Also check this site's public pages in this scan (requires remote checks to be enabled).
+	 *
+	 * [--full]
+	 * : Re-hash every monitored file and re-verify core and plugin checksums now, instead of waiting for the daily full pass.
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     wp bee-monitor scan
+	 *     wp bee-monitor scan --full
 	 *     wp bee-monitor scan --rebuild
 	 *
 	 * @param array $args       Positional arguments.
@@ -44,7 +51,7 @@ final class CLI {
 			Storage::delete( 'scan_state' );
 			$scanner->start( 'cli', true );
 		} elseif ( ! Scanner::is_running() ) {
-			$scanner->start( 'cli' );
+			$scanner->start( 'cli', false, ! empty( $assoc_args['full'] ), ! empty( $assoc_args['remote'] ) );
 		}
 		$steps = 0;
 		do {
@@ -297,6 +304,99 @@ final class CLI {
 			\WP_CLI::error( 'Test email failed: ' . $result['error'] );
 		}
 		\WP_CLI::success( 'Test email sent to ' . implode( ', ', Settings::recipients() ) . '.' );
+	}
+
+	/**
+	 * Export a findings report to stdout. Personal data and the site address are excluded unless requested.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--format=<format>]
+	 * : json or csv.
+	 * ---
+	 * default: json
+	 * ---
+	 *
+	 * [--status=<status>]
+	 * : open, expected, resolved, auto, ignored, or all.
+	 * ---
+	 * default: open
+	 * ---
+	 *
+	 * [--include-personal]
+	 * : Include usernames, user IDs, masked emails, and masked networks.
+	 *
+	 * [--include-site]
+	 * : Include the site name and address.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp bee-monitor export > report.json
+	 *     wp bee-monitor export --format=csv --status=all > findings.csv
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Options.
+	 */
+	public function export( $args, $assoc_args ) {
+		$status = isset( $assoc_args['status'] ) ? sanitize_key( $assoc_args['status'] ) : 'open';
+		if ( ! in_array( $status, array( 'open', 'expected', 'resolved', 'auto', 'ignored', 'all' ), true ) ) {
+			\WP_CLI::error( 'Unknown status.' );
+		}
+		$report = Report::build(
+			array(
+				'status'           => $status,
+				'include_personal' => ! empty( $assoc_args['include-personal'] ),
+				'include_site'     => ! empty( $assoc_args['include-site'] ),
+			)
+		);
+		\WP_CLI::line( isset( $assoc_args['format'] ) && 'csv' === $assoc_args['format'] ? Report::to_csv( $report ) : Report::to_json( $report ) );
+	}
+
+	/**
+	 * List recent activity.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [--type=<type>]
+	 * : Event type, for example update_plugin or user_change.
+	 *
+	 * [--format=<format>]
+	 * : table, csv, json, or yaml.
+	 * ---
+	 * default: table
+	 * ---
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Options.
+	 */
+	public function activity( $args, $assoc_args ) {
+		$result = Activity::query( isset( $assoc_args['type'] ) ? sanitize_key( $assoc_args['type'] ) : '', 1 );
+		$rows   = array();
+		foreach ( $result['items'] as $row ) {
+			$rows[] = array(
+				'time'   => $row['created_at'],
+				'event'  => $row['type'],
+				'object' => $row['object'],
+				'detail' => $row['detail'],
+				'actor'  => (int) $row['actor'],
+				'via'    => $row['via'],
+			);
+		}
+		\WP_CLI\Utils\format_items( isset( $assoc_args['format'] ) ? $assoc_args['format'] : 'table', $rows, array( 'time', 'event', 'object', 'detail', 'actor', 'via' ) );
+	}
+
+	/**
+	 * Cancel the running scan.
+	 *
+	 * @param array $args       Positional arguments.
+	 * @param array $assoc_args Options.
+	 */
+	public function cancel( $args, $assoc_args ) {
+		if ( ! Scanner::request_cancel() ) {
+			\WP_CLI::warning( 'No scan is running.' );
+			return;
+		}
+		\WP_CLI::success( 'Cancellation requested.' );
 	}
 
 	/**

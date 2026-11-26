@@ -119,6 +119,15 @@ final class Heuristics {
 			);
 		}
 
+		$result['signature'] = null;
+		foreach ( Signatures::match( $content, 'php' ) as $sig ) {
+			$evidence                     = self::match_evidence( $content, $sig[4], $sig[0] . ': ' . $sig[3], $sig[0] );
+			$result['matches'][ $sig[0] ] = $evidence;
+			if ( null === $result['signature'] || $sig[1] > $result['signature'][1] ) {
+				$result['signature'] = $sig;
+			}
+		}
+
 		if ( ! empty( $kinds['decode'] ) && ! empty( $kinds['exec'] ) ) {
 			$result['score'] += 3;
 			$result['combo']  = true;
@@ -135,6 +144,10 @@ final class Heuristics {
 	 * @return array|null severity, confidence or null when below the reporting threshold.
 	 */
 	public static function verdict( array $result ) {
+		if ( ! empty( $result['signature'] ) ) {
+			$sig = $result['signature'];
+			return array( max( (int) $sig[1], $result['shell'] ? Findings::HIGH : Findings::INFO ), $result['shell'] ? 'high' : $sig[2] );
+		}
 		if ( $result['shell'] ) {
 			return array( Findings::HIGH, 'high' );
 		}
@@ -218,6 +231,9 @@ final class Heuristics {
 	 * @return array|null Evidence when found.
 	 */
 	public static function php_in_content( $content ) {
+		foreach ( Signatures::match( $content, 'any' ) as $sig ) {
+			return self::match_evidence( $content, $sig[4], $sig[0] . ': ' . $sig[3], $sig[0] );
+		}
 		if ( preg_match( '~<\?(?:php|=)~i', $content, $m, PREG_OFFSET_CAPTURE ) ) {
 			return self::match_evidence( $content, $m[0][1], __( 'Contains a PHP open tag', 'bee-monitor' ), 'php_tag' );
 		}

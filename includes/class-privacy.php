@@ -33,6 +33,7 @@ final class Privacy {
 		$content  = '<p>' . esc_html__( 'This site uses Bee Monitor to detect unauthorized changes and suspicious activity. For accounts with administrative capabilities, Bee Monitor stores the username, a masked email address, and roles so that changes to those accounts can be reported to site administrators.', 'bee-monitor' ) . '</p>';
 		$content .= '<p>' . esc_html__( 'When login monitoring is enabled, Bee Monitor counts failed login attempts and stores only masked network addresses (for example 203.0.113.x) and keyed hashes of attempted usernames. For administrative accounts it stores keyed hashes of the networks they sign in from, to detect sign-ins from new networks.', 'bee-monitor' ) . '</p>';
 		$content .= '<p>' . esc_html__( 'Security findings are kept until an administrator resolves them, then deleted after the retention period configured in Bee Monitor. This data is sent only to the alert recipients configured in Bee Monitor, by email. Bee Monitor stores those recipient email addresses and a hashed record of which alerts were sent to each.', 'bee-monitor' ) . '</p>';
+		$content .= '<p>' . esc_html__( 'Bee Monitor keeps an activity log of security-relevant changes (for example plugin updates, role changes, and settings changes) with the ID of the user who made them. Entries are deleted after the retention period set in Bee Monitor (30 days by default).', 'bee-monitor' ) . '</p>';
 		wp_add_privacy_policy_content( 'Bee Monitor', wp_kses_post( $content ) );
 	}
 
@@ -89,6 +90,29 @@ final class Privacy {
 				);
 			}
 		}
+		if ( $user ) {
+			foreach ( Activity::for_actor( (int) $user->ID ) as $i => $row ) {
+				$data[] = array(
+					'group_id'    => 'bee-monitor-activity',
+					'group_label' => __( 'Bee Monitor activity log', 'bee-monitor' ),
+					'item_id'     => 'bee-monitor-activity-' . $user->ID . '-' . $i,
+					'data'        => array(
+						array(
+							'name'  => __( 'Time (UTC)', 'bee-monitor' ),
+							'value' => $row['created_at'],
+						),
+						array(
+							'name'  => __( 'Event', 'bee-monitor' ),
+							'value' => Activity::label( $row['type'] ),
+						),
+						array(
+							'name'  => __( 'Object', 'bee-monitor' ),
+							'value' => $row['object'],
+						),
+					),
+				);
+			}
+		}
 		return array(
 			'data' => $data,
 			'done' => true,
@@ -103,9 +127,9 @@ final class Privacy {
 	 */
 	public static function erase( $email ) {
 		$user    = get_user_by( 'email', $email );
-		$removed = false;
+		$removed = $user ? Activity::anonymize_actor( (int) $user->ID ) > 0 : false;
 		if ( $user && get_user_meta( $user->ID, Login_Monitor::META_KEY, true ) ) {
-			$removed = delete_user_meta( $user->ID, Login_Monitor::META_KEY );
+			$removed = delete_user_meta( $user->ID, Login_Monitor::META_KEY ) || $removed;
 		}
 		return array(
 			'items_removed'  => $removed,

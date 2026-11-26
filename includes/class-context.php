@@ -32,8 +32,10 @@ final class Context {
 		add_action( 'user_register', array( __CLASS__, 'on_user_register' ), 10, 1 );
 		add_action( 'set_user_role', array( __CLASS__, 'on_set_role' ), 10, 1 );
 		add_action( 'profile_update', array( __CLASS__, 'on_profile_update' ), 10, 1 );
+		add_action( 'deleted_user', array( __CLASS__, 'on_user_deleted' ), 10, 1 );
 		add_action( 'grant_super_admin', array( __CLASS__, 'on_user_register' ), 10, 1 );
 		add_action( 'updated_option', array( __CLASS__, 'on_option' ), 10, 1 );
+		add_action( 'wp_create_application_password', array( __CLASS__, 'on_app_password' ), 10, 2 );
 	}
 
 	/**
@@ -41,8 +43,10 @@ final class Context {
 	 *
 	 * @param string $type   Event type.
 	 * @param string $object_id Object identifier.
+	 * @param string $detail    Short detail for the activity log.
 	 */
-	public static function add( $type, $object_id ) {
+	public static function add( $type, $object_id, $detail = '' ) {
+		Activity::log( $type, (string) $object_id, $detail );
 		$events   = self::events();
 		$events[] = array(
 			'type'   => $type,
@@ -116,7 +120,7 @@ final class Context {
 	 *
 	 * @return string
 	 */
-	private static function via() {
+	public static function via() {
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			return 'wp-cli';
 		}
@@ -163,7 +167,7 @@ final class Context {
 		}
 		foreach ( $objs as $obj ) {
 			$slug = strtok( (string) $obj, '/' );
-			self::add( 'update_' . sanitize_key( $type ), $slug );
+			self::add( 'update_' . sanitize_key( $type ), $slug, isset( $extra['action'] ) ? sanitize_key( $extra['action'] ) : '' );
 		}
 		if ( $objs && ! wp_next_scheduled( Plugin::CRON_CONTINUE ) && ! Scanner::is_running() ) {
 			wp_schedule_single_event( time() + 2 * MINUTE_IN_SECONDS, Plugin::CRON_SCAN );
@@ -239,12 +243,42 @@ final class Context {
 	}
 
 	/**
+	 * User deleted.
+	 *
+	 * @param int $user_id User ID.
+	 */
+	public static function on_user_deleted( $user_id ) {
+		self::add( 'user_deleted', (int) $user_id );
+	}
+
+	/**
 	 * Profile updated.
 	 *
 	 * @param int $user_id User ID.
 	 */
 	public static function on_profile_update( $user_id ) {
 		self::add( 'profile_update', (int) $user_id );
+	}
+
+	/**
+	 * Application password created through WordPress, recorded by a keyed hash of its ID.
+	 *
+	 * @param int   $user_id User ID.
+	 * @param array $item    The new application password item.
+	 */
+	public static function on_app_password( $user_id, $item = array() ) {
+		$uuid = is_array( $item ) && ! empty( $item['uuid'] ) ? (string) $item['uuid'] : '';
+		self::add( 'app_password', '' !== $uuid ? self::app_password_key( $uuid ) : 'user:' . (int) $user_id );
+	}
+
+	/**
+	 * Keyed hash identifying an application password without storing its ID.
+	 *
+	 * @param string $uuid Application password UUID.
+	 * @return string
+	 */
+	public static function app_password_key( $uuid ) {
+		return substr( hash_hmac( 'sha256', (string) $uuid, Storage::mac_key() ), 0, 16 );
 	}
 
 	/**

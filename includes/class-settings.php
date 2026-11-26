@@ -52,6 +52,8 @@ final class Settings {
 			),
 			'core_checksums'            => 1,
 			'auto_accept_verified_core' => 1,
+			'plugin_checksums'          => 0,
+			'posture_checks'            => 1,
 			'auto_accept_updates'       => 1,
 			'update_grace_minutes'      => 30,
 			'monitor_users'             => 1,
@@ -78,6 +80,9 @@ final class Settings {
 			'reminder_days'             => 3,
 			'heartbeat_url'             => '',
 			'retention_days'            => 180,
+			'activity_retention_days'   => 30,
+			'remote_checks'             => 0,
+			'allow_repairs'             => 0,
 			'delete_data_on_uninstall'  => 0,
 		);
 	}
@@ -156,7 +161,7 @@ final class Settings {
 		$errors   = array();
 		$warnings = array();
 
-		$bools = array( 'enabled', 'inspect_upload_images', 'scan_parent_dir', 'core_checksums', 'auto_accept_verified_core', 'auto_accept_updates', 'monitor_users', 'monitor_options', 'monitor_cron', 'monitor_logins', 'content_sweep', 'digest_all_clear', 'delete_data_on_uninstall' );
+		$bools = array( 'enabled', 'inspect_upload_images', 'scan_parent_dir', 'core_checksums', 'auto_accept_verified_core', 'plugin_checksums', 'posture_checks', 'remote_checks', 'allow_repairs', 'auto_accept_updates', 'monitor_users', 'monitor_options', 'monitor_cron', 'monitor_logins', 'content_sweep', 'digest_all_clear', 'delete_data_on_uninstall' );
 		foreach ( $bools as $key ) {
 			$out[ $key ] = empty( $input[ $key ] ) ? 0 : 1;
 		}
@@ -192,13 +197,14 @@ final class Settings {
 		$out['digest_frequency'] = self::choice( $input, 'digest_frequency', self::DIGESTS, $defaults['digest_frequency'] );
 
 		$ints = array(
-			'time_budget'            => array( 5, 120 ),
-			'max_inspect_kb'         => array( 64, 20480 ),
-			'update_grace_minutes'   => array( 0, 1440 ),
-			'failed_login_threshold' => array( 3, 10000 ),
-			'max_emails_per_hour'    => array( 1, 60 ),
-			'reminder_days'          => array( 0, 90 ),
-			'retention_days'         => array( 0, 3650 ),
+			'time_budget'             => array( 5, 120 ),
+			'max_inspect_kb'          => array( 64, 20480 ),
+			'update_grace_minutes'    => array( 0, 1440 ),
+			'failed_login_threshold'  => array( 3, 10000 ),
+			'max_emails_per_hour'     => array( 1, 60 ),
+			'reminder_days'           => array( 0, 90 ),
+			'retention_days'          => array( 0, 3650 ),
+			'activity_retention_days' => array( 1, 365 ),
 		);
 		foreach ( $ints as $key => $range ) {
 			$raw = isset( $input[ $key ] ) ? $input[ $key ] : $defaults[ $key ];
@@ -555,13 +561,14 @@ final class Settings {
 	 */
 	public static function label( $key ) {
 		$labels = array(
-			'time_budget'            => __( 'Time budget per scan step', 'bee-monitor' ),
-			'max_inspect_kb'         => __( 'Maximum file size to inspect', 'bee-monitor' ),
-			'update_grace_minutes'   => __( 'Update grace window', 'bee-monitor' ),
-			'failed_login_threshold' => __( 'Failed login threshold', 'bee-monitor' ),
-			'max_emails_per_hour'    => __( 'Maximum emails per hour', 'bee-monitor' ),
-			'reminder_days'          => __( 'Reminder interval', 'bee-monitor' ),
-			'retention_days'         => __( 'Finding retention', 'bee-monitor' ),
+			'time_budget'             => __( 'Time budget per scan step', 'bee-monitor' ),
+			'max_inspect_kb'          => __( 'Maximum file size to inspect', 'bee-monitor' ),
+			'update_grace_minutes'    => __( 'Update grace window', 'bee-monitor' ),
+			'failed_login_threshold'  => __( 'Failed login threshold', 'bee-monitor' ),
+			'max_emails_per_hour'     => __( 'Maximum emails per hour', 'bee-monitor' ),
+			'reminder_days'           => __( 'Reminder interval', 'bee-monitor' ),
+			'retention_days'          => __( 'Finding retention', 'bee-monitor' ),
+			'activity_retention_days' => __( 'Activity log retention', 'bee-monitor' ),
 		);
 		return isset( $labels[ $key ] ) ? $labels[ $key ] : $key;
 	}

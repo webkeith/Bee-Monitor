@@ -45,6 +45,10 @@ final class Storage {
 		'trusted_urls',
 		'deploy_until',
 		'digest_sig',
+		'cancel_scan',
+		'snapshot_app_passwords',
+		'quarantine',
+		'last_remote_check',
 	);
 
 	/**
@@ -70,6 +74,25 @@ final class Storage {
 			return get_site_option( self::OPTION_PREFIX . $key, $fallback );
 		}
 		return get_option( self::OPTION_PREFIX . $key, $fallback );
+	}
+
+	/**
+	 * Read an option directly from the database, bypassing the per-request cache
+	 * (used for flags set by another request, such as scan cancellation).
+	 *
+	 * @param string $key      Key without prefix.
+	 * @param mixed  $fallback Default.
+	 * @return mixed
+	 */
+	public static function get_fresh( $key, $fallback = false ) {
+		$name = self::OPTION_PREFIX . $key;
+		if ( is_multisite() ) {
+			wp_cache_delete( get_current_network_id() . ':' . $name, 'site-options' );
+		} else {
+			wp_cache_delete( $name, 'options' );
+			wp_cache_delete( 'notoptions', 'options' );
+		}
+		return self::get( $key, $fallback );
 	}
 
 	/**
@@ -111,6 +134,7 @@ final class Storage {
 		$findings = self::table( 'findings' );
 		$log      = self::table( 'log' );
 		$delivery = self::table( 'deliveries' );
+		$activity = self::table( 'activity' );
 
 		dbDelta(
 			"CREATE TABLE {$baseline} (
@@ -182,6 +206,22 @@ final class Storage {
 			) {$charset};"
 		);
 
+		dbDelta(
+			"CREATE TABLE {$activity} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				created_at datetime NOT NULL DEFAULT '1970-01-01 00:00:00',
+				type varchar(32) NOT NULL DEFAULT '',
+				object varchar(191) NOT NULL DEFAULT '',
+				actor bigint(20) unsigned NOT NULL DEFAULT 0,
+				via varchar(16) NOT NULL DEFAULT '',
+				detail varchar(255) NOT NULL DEFAULT '',
+				PRIMARY KEY  (id),
+				KEY created_at (created_at),
+				KEY type (type),
+				KEY actor (actor)
+			) {$charset};"
+		);
+
 		self::set( 'db_version', BEE_MONITOR_DB_VERSION );
 	}
 
@@ -205,7 +245,7 @@ final class Storage {
 		if ( true === $exists ) {
 			return true;
 		}
-		foreach ( array( 'baseline', 'findings', 'log', 'deliveries' ) as $name ) {
+		foreach ( array( 'baseline', 'findings', 'log', 'deliveries', 'activity' ) as $name ) {
 			$table = self::table( $name );
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
 			if ( $found !== $table ) {

@@ -491,6 +491,9 @@ final class Notifier {
 	 */
 	private static function evidence_lines( array $ev ) {
 		$l = array();
+		if ( ! empty( $ev['verification'] ) ) {
+			$l[] = __( 'Verification:', 'bee-monitor' ) . ' ' . Findings::term( 'verification', $ev['verification'] );
+		}
 		if ( ! empty( $ev['context'] ) ) {
 			$l[] = __( 'Context:', 'bee-monitor' ) . ' ' . $ev['context'];
 		}

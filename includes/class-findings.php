@@ -62,6 +62,25 @@ final class Findings {
 		'settings_changed_externally' => 'monitor',
 		'scan_gap'                    => 'monitor',
 		'mail_filter_suspicious'      => 'monitor',
+		'hidden_privileged_user'      => 'users',
+		'application_password_added'  => 'users',
+		'default_admin_username'      => 'users',
+		'runtime_prepend'             => 'options',
+		'file_editor_enabled'         => 'options',
+		'debug_display_enabled'       => 'options',
+		'debug_log_public'            => 'options',
+		'world_writable_sensitive'    => 'options',
+		'config_world_readable'       => 'options',
+		'php_unsupported'             => 'options',
+		'remote_redirect'             => 'content',
+		'remote_injected_script'      => 'content',
+		'remote_obfuscated_script'    => 'content',
+		'remote_hidden_iframe'        => 'content',
+		'remote_hidden_links'         => 'content',
+		'remote_cloaking'             => 'content',
+		'remote_php_error'            => 'content',
+		'remote_site_error'           => 'content',
+		'remote_unreachable'          => 'monitor',
 	);
 
 	/**
@@ -270,6 +289,60 @@ final class Findings {
 	}
 
 	/**
+	 * Resolve open findings of a posture rule whose condition is no longer present.
+	 *
+	 * @param string   $rule      Rule ID.
+	 * @param string[] $keep_keys Fingerprint keys still present (findings matching these stay open).
+	 * @return int Rows resolved.
+	 */
+	public static function auto_resolve( $rule, array $keep_keys = array() ) {
+		global $wpdb;
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT id, subject FROM %i WHERE rule = %s AND status = %s', Storage::table( 'findings' ), $rule, self::STATUS_OPEN ), ARRAY_A );
+		$ids  = array();
+		foreach ( (array) $rows as $row ) {
+			if ( ! in_array( $row['subject'], $keep_keys, true ) ) {
+				$ids[] = (int) $row['id'];
+			}
+		}
+		return $ids ? self::set_status( $ids, self::STATUS_RESOLVED, __( 'Condition no longer present (verified by scan).', 'bee-monitor' ), 0 ) : 0;
+	}
+
+	/**
+	 * Other findings for the same subject.
+	 *
+	 * @param string $subject Subject.
+	 * @param int    $exclude Finding ID to exclude.
+	 * @return array
+	 */
+	public static function related( $subject, $exclude ) {
+		global $wpdb;
+		$rows = $wpdb->get_results( $wpdb->prepare( 'SELECT * FROM %i WHERE subject = %s AND id <> %d ORDER BY last_seen DESC LIMIT 10', Storage::table( 'findings' ), $subject, $exclude ), ARRAY_A );
+		return array_map( array( __CLASS__, 'hydrate' ), (array) $rows );
+	}
+
+	/**
+	 * Filter findings by category and subject text (applied in PHP; findings tables are small and retention-pruned).
+	 *
+	 * @param array  $items    Findings.
+	 * @param string $category Category or ''.
+	 * @param string $search   Case-insensitive subject substring or ''.
+	 * @return array
+	 */
+	public static function filter( array $items, $category, $search ) {
+		return array_values(
+			array_filter(
+				$items,
+				function ( $item ) use ( $category, $search ) {
+					if ( '' !== $category && self::category( $item['rule'] ) !== $category ) {
+						return false;
+					}
+					return '' === $search || false !== stripos( $item['subject'], $search );
+				}
+			)
+		);
+	}
+
+	/**
 	 * Counts of open findings per severity.
 	 *
 	 * @return array
@@ -349,20 +422,20 @@ final class Findings {
 	 */
 	public static function term( $group, $key ) {
 		$terms = array(
-			'confidence' => array(
+			'confidence'   => array(
 				'confirmed' => __( 'confirmed', 'bee-monitor' ),
 				'high'      => __( 'high confidence', 'bee-monitor' ),
 				'medium'    => __( 'medium confidence', 'bee-monitor' ),
 				'low'       => __( 'low confidence', 'bee-monitor' ),
 			),
-			'basis'      => array(
+			'basis'        => array(
 				'integrity' => __( 'integrity check', 'bee-monitor' ),
 				'heuristic' => __( 'heuristic indicator', 'bee-monitor' ),
 				'location'  => __( 'location rule', 'bee-monitor' ),
 				'event'     => __( 'site event', 'bee-monitor' ),
 				'monitor'   => __( 'monitor health', 'bee-monitor' ),
 			),
-			'change'     => array(
+			'change'       => array(
 				'added'               => __( 'added', 'bee-monitor' ),
 				'modified'            => __( 'modified', 'bee-monitor' ),
 				'deleted'             => __( 'deleted', 'bee-monitor' ),
@@ -373,16 +446,40 @@ final class Findings {
 				'removed'             => __( 'removed', 'bee-monitor' ),
 				'detected'            => __( 'detected', 'bee-monitor' ),
 				'updated'             => __( 'updated', 'bee-monitor' ),
+				'verified'            => __( 'verified against WordPress.org', 'bee-monitor' ),
 			),
-			'status'     => array(
-				'open'     => __( 'Open', 'bee-monitor' ),
-				'expected' => __( 'Expected', 'bee-monitor' ),
-				'resolved' => __( 'Resolved', 'bee-monitor' ),
-				'auto'     => __( 'Auto-verified', 'bee-monitor' ),
-				'ignored'  => __( 'Ignored', 'bee-monitor' ),
+			'verification' => array(
+				'official' => __( 'Verified against official WordPress.org checksums', 'bee-monitor' ),
+				'baseline' => __( 'Unverified: compared with Bee Monitor\'s local baseline only', 'bee-monitor' ),
+				'pattern'  => __( 'Pattern or location rule: a lead for review, not proof of infection', 'bee-monitor' ),
+			),
+			'status'       => array(
+				'open'        => __( 'Open', 'bee-monitor' ),
+				'expected'    => __( 'Expected', 'bee-monitor' ),
+				'resolved'    => __( 'Resolved', 'bee-monitor' ),
+				'auto'        => __( 'Auto-verified', 'bee-monitor' ),
+				'ignored'     => __( 'Ignored', 'bee-monitor' ),
+				'repaired'    => __( 'Repaired', 'bee-monitor' ),
+				'quarantined' => __( 'Quarantined', 'bee-monitor' ),
 			),
 		);
 		return isset( $terms[ $group ][ $key ] ) ? $terms[ $group ][ $key ] : $key;
+	}
+
+	/**
+	 * How a file finding was verified: official (WordPress.org checksums), baseline (local baseline only), or pattern.
+	 *
+	 * @param string $rule Rule ID.
+	 * @return string
+	 */
+	public static function verification_for( $rule ) {
+		if ( in_array( $rule, array( 'core_checksum_mismatch', 'core_unknown_file', 'core_file_missing', 'core_file_updated', 'plugin_checksum_mismatch', 'plugin_unknown_file' ), true ) ) {
+			return 'official';
+		}
+		if ( in_array( $rule, array( 'suspicious_code', 'remote_redirect', 'remote_injected_script', 'remote_obfuscated_script', 'remote_hidden_iframe', 'remote_hidden_links', 'remote_cloaking', 'executable_in_uploads', 'executable_in_cache', 'inert_php_stub', 'php_in_media_file', 'unexpected_php_file', 'config_injection', 'server_config_risk' ), true ) ) {
+			return 'pattern';
+		}
+		return 'baseline';
 	}
 
 	/**
@@ -406,7 +503,7 @@ final class Findings {
 			'files'   => __( 'File changes and malware indicators', 'bee-monitor' ),
 			'core'    => __( 'WordPress core integrity', 'bee-monitor' ),
 			'users'   => __( 'Users and roles', 'bee-monitor' ),
-			'options' => __( 'Site settings, plugins, and theme', 'bee-monitor' ),
+			'options' => __( 'Site configuration, plugins, and theme', 'bee-monitor' ),
 			'cron'    => __( 'Scheduled tasks', 'bee-monitor' ),
 			'content' => __( 'Content injection', 'bee-monitor' ),
 			'logins'  => __( 'Login activity', 'bee-monitor' ),
@@ -480,6 +577,27 @@ final class Findings {
 			'injected_post_script'        => __( 'Script from an unlisted domain in post content', 'bee-monitor' ),
 			'failed_login_burst'          => __( 'Repeated failed logins', 'bee-monitor' ),
 			'privileged_login_new_net'    => __( 'Privileged login from a new network', 'bee-monitor' ),
+			'plugin_checksum_mismatch'    => __( 'Plugin file does not match the official WordPress.org release', 'bee-monitor' ),
+			'plugin_unknown_file'         => __( 'File not part of the official plugin release', 'bee-monitor' ),
+			'hidden_privileged_user'      => __( 'Privileged user hidden from WordPress user queries', 'bee-monitor' ),
+			'application_password_added'  => __( 'Application password added to a privileged account', 'bee-monitor' ),
+			'default_admin_username'      => __( 'Privileged account uses the username "admin"', 'bee-monitor' ),
+			'runtime_prepend'             => __( 'PHP runs a file before or after every request', 'bee-monitor' ),
+			'file_editor_enabled'         => __( 'Dashboard file editor is enabled', 'bee-monitor' ),
+			'debug_display_enabled'       => __( 'Debug output is shown to visitors', 'bee-monitor' ),
+			'debug_log_public'            => __( 'Debug log is inside the web root', 'bee-monitor' ),
+			'world_writable_sensitive'    => __( 'Sensitive file or folder is world-writable', 'bee-monitor' ),
+			'config_world_readable'       => __( 'wp-config.php is readable by all system users', 'bee-monitor' ),
+			'php_unsupported'             => __( 'PHP version no longer receives security updates', 'bee-monitor' ),
+			'remote_redirect'             => __( 'Public page redirects to another website', 'bee-monitor' ),
+			'remote_injected_script'      => __( 'Public page loads scripts from untrusted domains', 'bee-monitor' ),
+			'remote_obfuscated_script'    => __( 'Obfuscated script on a public page', 'bee-monitor' ),
+			'remote_hidden_iframe'        => __( 'Hidden frame on a public page', 'bee-monitor' ),
+			'remote_hidden_links'         => __( 'Hidden links on a public page', 'bee-monitor' ),
+			'remote_cloaking'             => __( 'Search engines see different content (cloaking)', 'bee-monitor' ),
+			'remote_php_error'            => __( 'PHP errors visible on a public page', 'bee-monitor' ),
+			'remote_site_error'           => __( 'Public page returns a server error', 'bee-monitor' ),
+			'remote_unreachable'          => __( 'Public page could not be checked', 'bee-monitor' ),
 		);
 	}
 
@@ -537,6 +655,27 @@ final class Findings {
 			'failed_login_burst'          => __( 'Use strong passwords and two-factor authentication. Consider rate limiting logins at the server or firewall.', 'bee-monitor' ),
 			'privileged_login_new_net'    => __( 'Confirm the login with the account owner. If it was not them, reset the password and review recent activity.', 'bee-monitor' ),
 			'update_changes'              => __( 'No action needed unless you did not perform this update.', 'bee-monitor' ),
+			'plugin_checksum_mismatch'    => __( 'Compare the file with the same plugin version from WordPress.org (wp plugin verify-checksums). If you did not edit it, reinstall the plugin from WordPress.org after preserving a copy for evidence.', 'bee-monitor' ),
+			'plugin_unknown_file'         => __( 'Some plugins create files at runtime, but extra PHP files in a plugin folder are a common backdoor location. Check what created it and whether the plugin references it.', 'bee-monitor' ),
+			'hidden_privileged_user'      => __( 'Code is filtering user queries to hide this account, a common backdoor technique. Find the filter (search plugins, themes, and mu-plugins for pre_user_query or users_list_table_query_args), preserve evidence, then remove the account and the code.', 'bee-monitor' ),
+			'application_password_added'  => __( 'Application passwords allow API access without the normal login or two-factor checks. If the account owner did not create it, revoke it under Users > Profile > Application Passwords and investigate.', 'bee-monitor' ),
+			'default_admin_username'      => __( 'Rename the account or create a new administrator and delete this one. "admin" is the first username guessed in brute-force attacks.', 'bee-monitor' ),
+			'runtime_prepend'             => __( 'Confirm the file belongs to a trusted security product (for example a firewall). Otherwise inspect it immediately and find where it is configured (php.ini, .user.ini, .htaccess, or the hosting panel).', 'bee-monitor' ),
+			'file_editor_enabled'         => __( 'Add define( \'DISALLOW_FILE_EDIT\', true ); to wp-config.php so a stolen admin session cannot edit plugin or theme code from the dashboard.', 'bee-monitor' ),
+			'debug_display_enabled'       => __( 'Set WP_DEBUG_DISPLAY to false (and WP_DEBUG to false) on production sites. Error output reveals paths and internals.', 'bee-monitor' ),
+			'debug_log_public'            => __( 'Move the log outside the web root (set WP_DEBUG_LOG to a path above the site) or block access to it in the web server, and delete old logs.', 'bee-monitor' ),
+			'world_writable_sensitive'    => __( 'Remove world write permission (for example chmod 640 for wp-config.php, 644 for other files, 755 for folders), and check ownership with your host.', 'bee-monitor' ),
+			'config_world_readable'       => __( 'On shared hosting, other accounts may read world-readable files. Set wp-config.php to 640 or 600 if your host supports it.', 'bee-monitor' ),
+			'php_unsupported'             => __( 'Ask your host to upgrade PHP to a supported version. Unsupported versions do not receive security fixes.', 'bee-monitor' ),
+			'remote_redirect'             => __( 'Check redirect plugins, .htaccess, wp-config.php, theme files, and the database (siteurl, home, posts, options) for the target domain. Search engines may flag the site if this is malicious.', 'bee-monitor' ),
+			'remote_injected_script'      => __( 'If you do not recognize a domain, find where the script is added (theme, plugins, widgets, options) and remove it after preserving evidence. Add trusted services to the allowlist.', 'bee-monitor' ),
+			'remote_obfuscated_script'    => __( 'View the page source, find the script, and trace where it comes from (posts, options, theme files, or a plugin). Preserve evidence before removing it.', 'bee-monitor' ),
+			'remote_hidden_iframe'        => __( 'Find the iframe in the page source and trace its origin in theme files, plugins, widgets, or the database.', 'bee-monitor' ),
+			'remote_hidden_links'         => __( 'Find the hidden block in theme files or the database and remove it after preserving evidence. Check Google Search Console for manual actions.', 'bee-monitor' ),
+			'remote_cloaking'             => __( 'Look for code that checks the user agent or referrer (theme functions.php, mu-plugins, .htaccess). Use Google Search Console URL Inspection to see what Google sees.', 'bee-monitor' ),
+			'remote_php_error'            => __( 'Turn off error display on production (WP_DEBUG_DISPLAY) and fix the underlying error.', 'bee-monitor' ),
+			'remote_site_error'           => __( 'Check the PHP error log and recent changes.', 'bee-monitor' ),
+			'remote_unreachable'          => __( 'If your host blocks loopback requests, turn off remote checks or ask the host to allow them.', 'bee-monitor' ),
 		);
 		return isset( $steps[ $rule ] ) ? $steps[ $rule ] : __( 'Review the change and confirm it was expected.', 'bee-monitor' );
 	}
@@ -548,6 +687,6 @@ final class Findings {
 	 * @return bool
 	 */
 	public static function is_file_rule( $rule ) {
-		return in_array( $rule, array( 'core_checksum_mismatch', 'core_unknown_file', 'core_file_missing', 'config_modified', 'server_config_changed', 'persistence_file_changed', 'self_modified', 'component_file_changed', 'unexpected_php_file', 'php_file_changed', 'file_deleted', 'suspicious_code', 'config_injection', 'server_config_risk' ), true );
+		return in_array( $rule, array( 'plugin_checksum_mismatch', 'plugin_unknown_file', 'core_checksum_mismatch', 'core_unknown_file', 'core_file_missing', 'config_modified', 'server_config_changed', 'persistence_file_changed', 'self_modified', 'component_file_changed', 'unexpected_php_file', 'php_file_changed', 'file_deleted', 'suspicious_code', 'config_injection', 'server_config_risk' ), true );
 	}
 }

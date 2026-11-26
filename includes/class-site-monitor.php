@@ -32,6 +32,11 @@ final class Site_Monitor {
 		if ( $settings['monitor_users'] ) {
 			self::check_roles();
 			self::check_users();
+			self::check_hidden_users();
+			self::check_application_passwords();
+		}
+		if ( $settings['posture_checks'] ) {
+			self::check_posture();
 		}
 		if ( $settings['monitor_options'] ) {
 			self::check_options();
@@ -243,6 +248,236 @@ final class Site_Monitor {
 				)
 			);
 		}
+	}
+
+	/**
+	 * Administrators that exist in the database but are hidden from WordPress user queries.
+	 */
+	private static function check_hidden_users() {
+		global $wpdb;
+		if ( is_multisite() ) {
+			return;
+		}
+		$like = '%' . $wpdb->esc_like( '"administrator"' ) . '%';
+		$raw  = array_map( 'intval', (array) $wpdb->get_col( $wpdb->prepare( 'SELECT user_id FROM %i WHERE meta_key = %s AND meta_value LIKE %s', $wpdb->usermeta, $wpdb->get_blog_prefix() . 'capabilities', $like ) ) );
+		$seen = array_map(
+			'intval',
+			(array) get_users(
+				array(
+					'role'   => 'administrator',
+					'fields' => 'ID',
+					'number' => 1000,
+				)
+			)
+		);
+		$keep = array();
+		foreach ( array_diff( $raw, $seen ) as $id ) {
+			$login = (string) $wpdb->get_var( $wpdb->prepare( 'SELECT user_login FROM %i WHERE ID = %d', $wpdb->users, $id ) );
+			if ( '' === $login ) {
+				continue;
+			}
+			/* translators: 1: username, 2: user ID. */
+			$subject = sprintf( __( 'User %1$s (ID %2$d)', 'bee-monitor' ), $login, $id );
+			$keep[]  = $subject;
+			Findings::record(
+				array(
+					'rule'        => 'hidden_privileged_user',
+					'severity'    => Findings::CRITICAL,
+					'confidence'  => 'high',
+					'basis'       => 'integrity',
+					'change_type' => 'detected',
+					'subject'     => $subject,
+					'reason'      => __( 'The database shows this account as an administrator, but WordPress user queries do not return it. Code is filtering the user list to hide the account.', 'bee-monitor' ),
+					'evidence'    => array(
+						'user_id' => $id,
+						'login'   => $login,
+						'sources' => array_map( array( Paths::class, 'display' ), array_merge( Paths::hook_files( 'pre_user_query' ), Paths::hook_files( 'users_list_table_query_args' ) ) ),
+					),
+					'key'         => (string) $id,
+				)
+			);
+		}
+		Findings::auto_resolve( 'hidden_privileged_user', $keep );
+	}
+
+	/**
+	 * New application passwords on privileged accounts (API access that bypasses the login form).
+	 */
+	private static function check_application_passwords() {
+		if ( ! class_exists( '\WP_Application_Passwords' ) ) {
+			return;
+		}
+		$users = Storage::get( 'snapshot_users', array() );
+		if ( ! is_array( $users ) ) {
+			return;
+		}
+		$current  = array();
+		$previous = Storage::get( 'snapshot_app_passwords', null );
+		foreach ( array_keys( $users ) as $id ) {
+			foreach ( (array) \WP_Application_Passwords::get_user_application_passwords( (int) $id ) as $item ) {
+				if ( empty( $item['uuid'] ) ) {
+					continue;
+				}
+				$key             = Context::app_password_key( $item['uuid'] );
+				$current[ $key ] = (int) $id;
+				if ( is_array( $previous ) && isset( $previous[ $key ] ) ) {
+					continue;
+				}
+				$event = Context::find( array( 'app_password' ), $key, time() - self::CONTEXT_WINDOW );
+				$known = $event && ( $event['actor'] || 'wp-cli' === $event['via'] );
+				Findings::record(
+					array(
+						'rule'        => 'application_password_added',
+						'severity'    => ! is_array( $previous ) ? Findings::LOW : ( $known ? Findings::MEDIUM : Findings::HIGH ),
+						'confidence'  => 'confirmed',
+						'basis'       => 'event',
+						'change_type' => is_array( $previous ) ? 'added' : 'present_at_baseline',
+						/* translators: 1: username, 2: user ID. */
+						'subject'     => sprintf( __( 'User %1$s (ID %2$d)', 'bee-monitor' ), $users[ $id ]['login'], $id ),
+						'reason'      => is_array( $previous )
+							? __( 'An application password was added to an account with powerful capabilities. Application passwords grant REST and XML-RPC access without the login form or two-factor prompts.', 'bee-monitor' ) . ' ' . Context::describe( $event )
+							: __( 'This privileged account already had an application password when Bee Monitor started checking. Confirm it is still needed.', 'bee-monitor' ),
+						'evidence'    => array(
+							'user_id'  => (int) $id,
+							'login'    => $users[ $id ]['login'],
+							'app_name' => substr( sanitize_text_field( (string) $item['name'] ), 0, 80 ),
+							'created'  => ! empty( $item['created'] ) ? gmdate( 'c', (int) $item['created'] ) : '',
+						),
+						'key'         => $key,
+					)
+				);
+			}
+		}
+		Storage::set( 'snapshot_app_passwords', $current );
+	}
+
+	/**
+	 * Read-only configuration and hardening checks. Findings close automatically when the condition is fixed.
+	 */
+	private static function check_posture() {
+		$d = Paths::dirs();
+
+		$present = array();
+		foreach ( array( 'auto_prepend_file', 'auto_append_file' ) as $directive ) {
+			$value = trim( (string) ini_get( $directive ) );
+			if ( '' === $value || 'none' === strtolower( $value ) ) {
+				continue;
+			}
+			$known     = (bool) preg_match( '/wordfence-waf\.php$/i', $value );
+			$subject   = 'php.ini: ' . $directive;
+			$present[] = $subject;
+			self::posture(
+				'runtime_prepend',
+				$known ? Findings::LOW : Findings::HIGH,
+				$known ? 'high' : 'medium',
+				$subject,
+				$known
+					? __( 'PHP loads a web application firewall file on every request. This is expected if you use that firewall.', 'bee-monitor' )
+					: __( 'PHP is configured to run this file on every request. Attackers use this to keep a backdoor running even after files in WordPress are cleaned.', 'bee-monitor' ),
+				array( 'file' => Paths::display( Paths::normalize( $value ) ) ),
+				md5( $value )
+			);
+		}
+		Findings::auto_resolve( 'runtime_prepend', $present );
+
+		$editor = ! ( defined( 'DISALLOW_FILE_EDIT' ) && DISALLOW_FILE_EDIT ) && ! ( defined( 'DISALLOW_FILE_MODS' ) && DISALLOW_FILE_MODS );
+		self::posture_toggle( $editor, 'file_editor_enabled', Findings::LOW, 'wp-config.php: DISALLOW_FILE_EDIT', __( 'Administrators can edit plugin and theme PHP from the dashboard, so a stolen admin session can plant code without file access.', 'bee-monitor' ) );
+
+		$production = function_exists( 'wp_get_environment_type' ) && 'production' === wp_get_environment_type();
+		$display    = defined( 'WP_DEBUG' ) && WP_DEBUG && ( ! defined( 'WP_DEBUG_DISPLAY' ) || WP_DEBUG_DISPLAY );
+		self::posture_toggle( $production && $display, 'debug_display_enabled', Findings::MEDIUM, 'wp-config.php: WP_DEBUG_DISPLAY', __( 'This is a production site and PHP errors are displayed to visitors, which can reveal file paths and internals.', 'bee-monitor' ) );
+
+		$logs = array( WP_CONTENT_DIR . '/debug.log' );
+		if ( defined( 'WP_DEBUG_LOG' ) && is_string( WP_DEBUG_LOG ) && ! in_array( strtolower( WP_DEBUG_LOG ), array( '1', 'true' ), true ) ) {
+			$logs[] = WP_DEBUG_LOG;
+		}
+		$keep = array();
+		foreach ( array_unique( $logs ) as $log ) {
+			$norm = Paths::normalize( $log );
+			if ( Paths::within( $norm, $d['abspath'] ) && @is_file( $norm ) && (int) @filesize( $norm ) > 0 ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				$subject = Paths::display( $norm );
+				$keep[]  = $subject;
+				self::posture( 'debug_log_public', Findings::MEDIUM, 'confirmed', $subject, __( 'A PHP debug log exists inside the web root. Unless the web server blocks it, anyone can download it, and logs often contain paths, queries, and user data.', 'bee-monitor' ), array( 'size' => (int) @filesize( $norm ) ), '' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			}
+		}
+		Findings::auto_resolve( 'debug_log_public', $keep );
+
+		$writable = array();
+		$readable = false;
+		if ( '\\' !== DIRECTORY_SEPARATOR ) {
+			$config  = @is_file( $d['abspath'] . '/wp-config.php' ) ? $d['abspath'] . '/wp-config.php' : $d['parent'] . '/wp-config.php'; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			$targets = array( $config, $d['abspath'] . '/.htaccess', $d['abspath'] . '/index.php', $d['abspath'] . '/wp-settings.php', $d['mu'], $d['plugins'] );
+			foreach ( $targets as $target ) {
+				$perms = @fileperms( $target ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+				if ( false !== $perms && ( $perms & 0x0002 ) ) {
+					$writable[ Paths::display( Paths::normalize( $target ) ) ] = substr( sprintf( '%o', $perms ), -4 );
+				}
+			}
+			$perms    = @fileperms( $config ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			$readable = false !== $perms && ( $perms & 0x0004 );
+		}
+		$keep = array();
+		foreach ( $writable as $path => $mode ) {
+			$keep[] = $path;
+			self::posture( 'world_writable_sensitive', Findings::HIGH, 'confirmed', $path, __( 'Any account on the server can modify this file or folder.', 'bee-monitor' ), array( 'mode' => $mode ), $mode );
+		}
+		Findings::auto_resolve( 'world_writable_sensitive', $keep );
+		self::posture_toggle( $readable, 'config_world_readable', Findings::LOW, 'wp-config.php', __( 'wp-config.php, which holds database credentials and keys, is readable by every account on the server.', 'bee-monitor' ) );
+
+		$admin = get_user_by( 'login', 'admin' );
+		self::posture_toggle( $admin && user_can( $admin, 'manage_options' ), 'default_admin_username', Findings::LOW, 'User admin', __( 'An administrator uses the username "admin", which is the first name tried in brute-force attacks.', 'bee-monitor' ) );
+
+		$php = get_site_transient( 'php_check_' . md5( PHP_VERSION ) );
+		if ( is_array( $php ) && isset( $php['is_secure'] ) ) {
+			/* translators: 1: current PHP version, 2: recommended version. */
+			self::posture_toggle( ! $php['is_secure'], 'php_unsupported', Findings::MEDIUM, 'PHP ' . PHP_VERSION, sprintf( __( 'WordPress.org reports that PHP %1$s no longer receives security updates. Recommended: %2$s or newer.', 'bee-monitor' ), PHP_VERSION, isset( $php['recommended_version'] ) ? sanitize_text_field( $php['recommended_version'] ) : '' ) );
+		}
+	}
+
+	/**
+	 * Record or resolve a single on/off posture condition.
+	 *
+	 * @param bool   $active   Whether the condition is present.
+	 * @param string $rule     Rule.
+	 * @param int    $severity Severity.
+	 * @param string $subject  Subject.
+	 * @param string $reason   Reason.
+	 * @param array  $evidence Evidence.
+	 */
+	private static function posture_toggle( $active, $rule, $severity, $subject, $reason, array $evidence = array() ) {
+		if ( $active ) {
+			self::posture( $rule, $severity, 'confirmed', $subject, $reason, $evidence, '' );
+			Findings::auto_resolve( $rule, array( $subject ) );
+		} else {
+			Findings::auto_resolve( $rule );
+		}
+	}
+
+	/**
+	 * Record a posture finding.
+	 *
+	 * @param string $rule       Rule.
+	 * @param int    $severity   Severity.
+	 * @param string $confidence Confidence.
+	 * @param string $subject    Subject.
+	 * @param string $reason     Reason.
+	 * @param array  $evidence   Evidence.
+	 * @param string $key        Dedup key.
+	 */
+	private static function posture( $rule, $severity, $confidence, $subject, $reason, array $evidence, $key ) {
+		Findings::record(
+			array(
+				'rule'        => $rule,
+				'severity'    => $severity,
+				'confidence'  => $confidence,
+				'basis'       => 'runtime_prepend' === $rule ? 'heuristic' : 'integrity',
+				'change_type' => 'detected',
+				'subject'     => $subject,
+				'reason'      => $reason,
+				'evidence'    => $evidence,
+				'key'         => $key,
+			)
+		);
 	}
 
 	/**

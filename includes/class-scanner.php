@@ -57,6 +57,43 @@ final class Scanner {
 	private $extra_ext = array();
 
 	/**
+	 * Installed plugin versions by folder, or null until loaded.
+	 *
+	 * @var array|null
+	 */
+	private $plugin_versions = null;
+
+	/**
+	 * Official plugin checksums by folder for this step (array, or null when unavailable).
+	 *
+	 * @var array
+	 */
+	private $plugin_sums = array();
+
+	/**
+	 * Remote checksum lookups made in this step.
+	 *
+	 * @var int
+	 */
+	private $fetches = 0;
+
+	/**
+	 * Last time the cancel flag was checked.
+	 *
+	 * @var float
+	 */
+	private $cancel_checked = 0.0;
+
+	/**
+	 * Whether a cancel request has been seen in this step.
+	 *
+	 * @var bool
+	 */
+	private $cancel_seen = false;
+
+	const MAX_FETCHES_PER_STEP = 3;
+
+	/**
 	 * Current scan state.
 	 *
 	 * @return array
@@ -81,9 +118,11 @@ final class Scanner {
 	 *
 	 * @param string $trigger    cron|manual|activation.
 	 * @param bool   $rebuild    Force a new baseline.
+	 * @param bool   $full       Re-hash every file and re-verify checksums now (otherwise once a day).
+	 * @param bool   $remote     Check public pages in this scan (when remote checks are enabled).
 	 * @return bool False if a scan is already running.
 	 */
-	public function start( $trigger, $rebuild = false ) {
+	public function start( $trigger, $rebuild = false, $full = false, $remote = false ) {
 		if ( self::is_running() && ! $rebuild ) {
 			return false;
 		}
@@ -174,12 +213,15 @@ final class Scanner {
 			);
 		}
 
+		Storage::delete( 'cancel_scan' );
 		$this->state = array(
 			'id'          => $id,
+			'estimate'    => 'baseline' === $mode ? 0 : $rows,
+			'remote_now'  => (bool) $remote,
 			'mode'        => $mode,
 			'note'        => $note,
 			'skip_mac'    => $skip,
-			'full_hash'   => 'scan' === $mode && ( time() - $last_full ) > DAY_IN_SECONDS,
+			'full_hash'   => 'scan' === $mode && ( $full || ( time() - $last_full ) > DAY_IN_SECONDS ),
 			'phase'       => 'walk',
 			'roots'       => $roots,
 			'stack'       => $stack,
@@ -210,7 +252,7 @@ final class Scanner {
 		$this->save();
 		Storage::log(
 			'info',
-			sprintf( 'Bee Monitor scan #%d started (%s, %s)', $id, $mode, $trigger ),
+			sprintf( 'Bee Monitor scan #%d started (%s, %s%s)', $id, $mode, $trigger, $full ? ', full' : '' ),
 			array( 'full_hash' => $this->state['full_hash'] )
 		);
 		return true;
@@ -234,7 +276,8 @@ final class Scanner {
 			);
 		}
 
-		$this->state = self::state();
+		$fresh       = Storage::get_fresh( 'scan_state', array() );
+		$this->state = is_array( $fresh ) ? $fresh : array();
 		if ( empty( $this->state['phase'] ) || 'done' === $this->state['phase'] ) {
 			Storage::release_lock( $token );
 			return $this->progress();
@@ -268,7 +311,10 @@ final class Scanner {
 						break;
 					case 'site':
 						Site_Monitor::run( $this->state );
-						$this->state['phase'] = 'finalize';
+						$this->state['phase'] = $this->remote_due() ? 'remote' : 'finalize';
+						break;
+					case 'remote':
+						$this->remote_step();
 						break;
 					case 'finalize':
 						$this->finalize();
@@ -285,6 +331,9 @@ final class Scanner {
 			}
 		}
 
+		if ( 'done' !== $this->state['phase'] && $this->cancel_requested( true ) ) {
+			$this->apply_cancel();
+		}
 		$this->state['touched'] = time();
 		$this->save();
 		Storage::release_lock( $token );
@@ -301,14 +350,42 @@ final class Scanner {
 	 * @return array
 	 */
 	public function progress() {
-		$s = $this->state ? $this->state : self::state();
+		$s     = $this->state ? $this->state : self::state();
+		$phase = isset( $s['phase'] ) ? $s['phase'] : '';
+		$stats = isset( $s['stats'] ) ? $s['stats'] : array();
+		$map   = array(
+			'deleted'  => 88,
+			'core'     => 91,
+			'site'     => 93,
+			'remote'   => 96,
+			'finalize' => 98,
+			'done'     => 100,
+		);
+		$pct   = null;
+		if ( 'walk' === $phase ) {
+			$pct = ! empty( $s['estimate'] ) ? min( 85, (int) floor( ( isset( $stats['files'] ) ? $stats['files'] : 0 ) / max( 1, (int) $s['estimate'] ) * 85 ) ) : null;
+		} elseif ( isset( $map[ $phase ] ) ) {
+			$pct = $map[ $phase ];
+		}
+		$labels = array(
+			'walk'     => __( 'Checking files', 'bee-monitor' ),
+			'deleted'  => __( 'Checking for deleted files', 'bee-monitor' ),
+			'core'     => __( 'Verifying WordPress core', 'bee-monitor' ),
+			'site'     => __( 'Checking users, settings, and configuration', 'bee-monitor' ),
+			'remote'   => __( 'Checking public pages', 'bee-monitor' ),
+			'finalize' => __( 'Finishing up', 'bee-monitor' ),
+			'done'     => __( 'Done', 'bee-monitor' ),
+		);
 		return array(
-			'done'    => empty( $s['phase'] ) || 'done' === $s['phase'],
-			'locked'  => false,
-			'phase'   => isset( $s['phase'] ) ? $s['phase'] : '',
-			'mode'    => isset( $s['mode'] ) ? $s['mode'] : '',
-			'stats'   => isset( $s['stats'] ) ? $s['stats'] : array(),
-			'message' => '',
+			'done'        => '' === $phase || 'done' === $phase,
+			'cancelled'   => ! empty( $s['cancelled'] ),
+			'locked'      => false,
+			'phase'       => $phase,
+			'phase_label' => isset( $labels[ $phase ] ) ? $labels[ $phase ] : '',
+			'percent'     => $pct,
+			'mode'        => isset( $s['mode'] ) ? $s['mode'] : '',
+			'stats'       => $stats,
+			'message'     => '',
 		);
 	}
 
@@ -325,7 +402,211 @@ final class Scanner {
 	 * @return bool
 	 */
 	private function out_of_time() {
-		return microtime( true ) >= $this->deadline;
+		return microtime( true ) >= $this->deadline || $this->cancel_requested( false );
+	}
+
+	/**
+	 * Whether remote page checks should run in this scan.
+	 *
+	 * @return bool
+	 */
+	private function remote_due() {
+		if ( ! Settings::value( 'remote_checks' ) ) {
+			return false;
+		}
+		return ! empty( $this->state['remote_now'] ) || time() - (int) Storage::get( 'last_remote_check', 0 ) > DAY_IN_SECONDS;
+	}
+
+	/**
+	 * Check one public page per call, then settle remote findings.
+	 */
+	private function remote_step() {
+		if ( ! isset( $this->state['remote_queue'] ) ) {
+			$this->state['remote_queue'] = Remote::queue();
+			$this->state['remote_found'] = array();
+			$this->state['remote_total'] = count( $this->state['remote_queue'] );
+		}
+		if ( $this->state['remote_queue'] ) {
+			$url                         = array_shift( $this->state['remote_queue'] );
+			$home                        = untrailingslashit( $url ) === untrailingslashit( home_url( '/' ) );
+			$this->state['remote_found'] = array_merge( $this->state['remote_found'], Remote::check( $url, $home ) );
+			if ( ! isset( $this->state['stats']['pages_checked'] ) ) {
+				$this->state['stats']['pages_checked'] = 0;
+			}
+			++$this->state['stats']['pages_checked'];
+			return;
+		}
+		Remote::settle( $this->state['remote_found'] );
+		Storage::set( 'last_remote_check', time() );
+		$this->state['phase'] = 'finalize';
+	}
+
+	/**
+	 * Request cancellation of the running scan. Applied immediately when no step is running,
+	 * otherwise by the running step within about a second.
+	 *
+	 * @return bool False when no scan is running.
+	 */
+	public static function request_cancel() {
+		$state = self::state();
+		if ( ! self::is_running() ) {
+			return false;
+		}
+		Storage::set( 'cancel_scan', (int) $state['id'] );
+		wp_clear_scheduled_hook( Plugin::CRON_CONTINUE );
+		$token = Storage::acquire_lock();
+		if ( false !== $token ) {
+			$scanner        = new self();
+			$scanner->state = self::state();
+			$scanner->apply_cancel();
+			Storage::release_lock( $token );
+		}
+		return true;
+	}
+
+	/**
+	 * Whether cancellation was requested for this scan (read from the database, not the request cache).
+	 *
+	 * @param bool $force Check now instead of at most once per second.
+	 * @return bool
+	 */
+	private function cancel_requested( $force ) {
+		if ( $this->cancel_seen || ( ! $force && microtime( true ) - $this->cancel_checked < 1 ) ) {
+			return $this->cancel_seen;
+		}
+		$this->cancel_checked = microtime( true );
+		$this->cancel_seen    = ! empty( $this->state['id'] ) && (int) Storage::get_fresh( 'cancel_scan', 0 ) === (int) $this->state['id'];
+		return $this->cancel_seen;
+	}
+
+	/**
+	 * Stop the scan. The baseline and last completed scan summary are left untouched;
+	 * an interrupted baseline build restarts on the next scan.
+	 */
+	private function apply_cancel() {
+		$this->state['phase']     = 'done';
+		$this->state['cancelled'] = true;
+		$this->state['touched']   = time();
+		$this->save();
+		Storage::delete( 'cancel_scan' );
+		Storage::log( 'warning', sprintf( 'Bee Monitor scan #%d cancelled', (int) $this->state['id'] ), array( 'user' => get_current_user_id() ) );
+		Activity::log( 'scan_cancelled', sprintf( 'Scan #%d', (int) $this->state['id'] ) );
+	}
+
+	/**
+	 * Installed plugin versions keyed by folder (single-file plugins are skipped).
+	 *
+	 * @return array
+	 */
+	private function plugin_versions() {
+		if ( null === $this->plugin_versions ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+			$this->plugin_versions = array();
+			foreach ( get_plugins() as $file => $data ) {
+				$dir = dirname( $file );
+				if ( '.' !== $dir && ! empty( $data['Version'] ) ) {
+					$this->plugin_versions[ $dir ] = (string) $data['Version'];
+				}
+			}
+		}
+		return $this->plugin_versions;
+	}
+
+	/**
+	 * Official WordPress.org checksums for an installed plugin (opt-in, cached for a day).
+	 *
+	 * @param string $slug Plugin folder.
+	 * @return array|null file => [ md5 => [], sha256 => [] ], or null when unavailable.
+	 */
+	private function plugin_checksums( $slug ) {
+		if ( array_key_exists( $slug, $this->plugin_sums ) ) {
+			return $this->plugin_sums[ $slug ];
+		}
+		$versions = $this->plugin_versions();
+		$version  = isset( $versions[ $slug ] ) ? $versions[ $slug ] : '';
+		if ( ! preg_match( '/^[a-z0-9][a-z0-9_-]*$/', $slug ) || ! preg_match( '/^[0-9A-Za-z.+_-]{1,40}$/', $version ) ) {
+			$this->plugin_sums[ $slug ] = null;
+			return null;
+		}
+		$key    = 'bee_monitor_pcs_' . md5( $slug . '|' . $version );
+		$cached = get_site_transient( $key );
+		if ( false !== $cached ) {
+			$this->plugin_sums[ $slug ] = is_array( $cached ) ? $cached : null;
+			return $this->plugin_sums[ $slug ];
+		}
+		if ( $this->fetches >= self::MAX_FETCHES_PER_STEP ) {
+			$this->plugin_sums[ $slug ] = null;
+			return null;
+		}
+		++$this->fetches;
+		$response = wp_safe_remote_get(
+			'https://downloads.wordpress.org/plugin-checksums/' . rawurlencode( $slug ) . '/' . rawurlencode( $version ) . '.json',
+			array(
+				'timeout'    => 10,
+				'user-agent' => 'Bee Monitor/' . BEE_MONITOR_VERSION,
+			)
+		);
+		$code     = is_wp_error( $response ) ? 0 : (int) wp_remote_retrieve_response_code( $response );
+		if ( 404 === $code ) {
+			set_site_transient( $key, 'none', DAY_IN_SECONDS );
+			$this->plugin_sums[ $slug ] = null;
+			return null;
+		}
+		$data  = 200 === $code ? json_decode( (string) wp_remote_retrieve_body( $response ), true ) : null;
+		$clean = array();
+		if ( is_array( $data ) && ! empty( $data['files'] ) && is_array( $data['files'] ) ) {
+			foreach ( $data['files'] as $file => $entry ) {
+				$entry          = is_array( $entry ) ? $entry : array( 'md5' => $entry );
+				$clean[ $file ] = array(
+					'md5'    => array_map( 'strval', (array) ( isset( $entry['md5'] ) ? $entry['md5'] : array() ) ),
+					'sha256' => array_map( 'strval', (array) ( isset( $entry['sha256'] ) ? $entry['sha256'] : array() ) ),
+				);
+			}
+		}
+		if ( ! $clean ) {
+			if ( ! isset( $this->state['stats']['plugin_checksum_errors'] ) ) {
+				$this->state['stats']['plugin_checksum_errors'] = 0;
+			}
+			++$this->state['stats']['plugin_checksum_errors'];
+			set_site_transient( $key, 'error', HOUR_IN_SECONDS );
+			$this->plugin_sums[ $slug ] = null;
+			return null;
+		}
+		set_site_transient( $key, $clean, DAY_IN_SECONDS );
+		$this->plugin_sums[ $slug ] = $clean;
+		return $clean;
+	}
+
+	/**
+	 * Compare a plugin file with the official release.
+	 *
+	 * @param array $f File (with hash).
+	 * @return string|null match|mismatch|unknown, or null when not verifiable.
+	 */
+	private function plugin_verdict( array $f ) {
+		if ( 'plugin' !== $f['area'] || ! Settings::value( 'plugin_checksums' ) ) {
+			return null;
+		}
+		$base  = Paths::dirs()['plugins'];
+		$parts = explode( '/', ltrim( substr( $f['abs'], strlen( $base ) ), '/' ), 2 );
+		if ( 2 !== count( $parts ) ) {
+			return null;
+		}
+		$sums = $this->plugin_checksums( $parts[0] );
+		if ( ! is_array( $sums ) ) {
+			return null;
+		}
+		if ( ! isset( $sums[ $parts[1] ] ) ) {
+			return 'unknown';
+		}
+		$hash = isset( $f['hash'] ) ? $f['hash'] : (string) @hash_file( 'sha256', $f['abs'] ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		if ( in_array( $hash, $sums[ $parts[1] ]['sha256'], true ) ) {
+			return 'match';
+		}
+		if ( $sums[ $parts[1] ]['md5'] && in_array( (string) @md5_file( $f['abs'] ), $sums[ $parts[1] ]['md5'], true ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			return 'match';
+		}
+		return 'mismatch';
 	}
 
 	/**
@@ -457,6 +738,9 @@ final class Scanner {
 		$seen = array();
 
 		foreach ( $files as $f ) {
+			if ( Repair::is_control_file( $f['abs'] ) ) {
+				continue;
+			}
 			++$s['stats']['files'];
 			$key       = md5( $f['rel'] );
 			$f['area'] = Paths::area( $f['abs'] );
@@ -500,6 +784,11 @@ final class Scanner {
 					}
 					if ( 'core' === $f['area'] ) {
 						$this->check_core( $f, 'present', $row );
+					} elseif ( 'plugin' === $f['area'] && $s['full_hash'] ) {
+						$f['hash'] = $hash;
+						if ( in_array( $this->plugin_verdict( $f ), array( 'mismatch', 'unknown' ), true ) ) {
+							$this->evaluate( $f, $hash, 'present', $row );
+						}
 					}
 					continue;
 				}
@@ -653,6 +942,24 @@ final class Scanner {
 			case 'plugin':
 			case 'theme':
 			case 'languages':
+				$official = $this->plugin_verdict( $f );
+				if ( 'match' === $official ) {
+					if ( ! $at_baseline ) {
+						Storage::upsert_baseline( $f['rel'], 'plugin', $hash, $f['size'], $f['mtime'], $this->state['id'] );
+						$this->note_update( 'plugin', Paths::component( $f['abs'], 'plugin' ), 'verified' );
+					}
+					return;
+				}
+				if ( 'mismatch' === $official ) {
+					$primary               = array( 'plugin_checksum_mismatch', Findings::CRITICAL, 'confirmed', 'integrity', __( 'This file differs from the official WordPress.org release of the installed plugin version. Plugin files should not be edited on the server.', 'bee-monitor' ) );
+					$evidence['component'] = Paths::component( $f['abs'], 'plugin' );
+					break;
+				}
+				if ( 'unknown' === $official && $is_exec ) {
+					$primary               = array( 'plugin_unknown_file', Findings::HIGH, 'medium', 'integrity', __( 'This PHP file is not part of the official WordPress.org release of the installed plugin version.', 'bee-monitor' ) );
+					$evidence['component'] = Paths::component( $f['abs'], 'plugin' );
+					break;
+				}
 				if ( $at_baseline ) {
 					break;
 				}
@@ -990,8 +1297,11 @@ final class Scanner {
 					'basis'       => 'event',
 					'change_type' => 'updated',
 					'subject'     => $component,
-					/* translators: 1: component, 2: list of change counts. */
-					'reason'      => sprintf( __( 'Files in %1$s changed during a recorded update and were accepted into the baseline automatically (%2$s). Any file with suspicious code indicators was reported separately.', 'bee-monitor' ), $component, implode( ', ', $parts ) ),
+					'reason'      => isset( $counts['verified'] ) && 1 === count( $counts )
+						/* translators: 1: component, 2: list of change counts. */
+						? sprintf( __( 'Files in %1$s changed and match the official WordPress.org release, so they were accepted into the baseline automatically (%2$s).', 'bee-monitor' ), $component, implode( ', ', $parts ) )
+						/* translators: 1: component, 2: list of change counts. */
+						: sprintf( __( 'Files in %1$s changed during a recorded update and were accepted into the baseline automatically (%2$s). Any file with suspicious code indicators was reported separately.', 'bee-monitor' ), $component, implode( ', ', $parts ) ),
 					'evidence'    => $counts,
 					'key'         => (string) $s['id'],
 					'status'      => Findings::STATUS_AUTO,
@@ -1021,6 +1331,9 @@ final class Scanner {
 		Storage::prune_log();
 		Storage::purge_findings( (int) Settings::value( 'retention_days' ) );
 		Storage::prune_deliveries();
+		Activity::purge( (int) Settings::value( 'activity_retention_days' ) );
+		/* translators: 1: files checked, 2: added, 3: modified, 4: deleted, 5: new findings. */
+		Activity::log( 'scan_completed', sprintf( 'Scan #%d (%s)', $s['id'], $s['mode'] ), sprintf( __( '%1$d files checked; %2$d added, %3$d modified, %4$d deleted; %5$d new findings', 'bee-monitor' ), $s['stats']['files'], $s['stats']['added'], $s['stats']['modified'], $s['stats']['deleted'], $s['stats']['findings'] ), (int) $s['actor'] );
 		Plugin::heartbeat();
 		Notifier::dispatch( 'baseline' === $s['mode'] ? 'baseline' : 'scan', $summary );
 	}
@@ -1134,6 +1447,9 @@ final class Scanner {
 	private function record_file( $rule, $severity, $confidence, $basis, $change, array $f, $reason, array $evidence, $key, $status = Findings::STATUS_OPEN ) {
 		$evidence['area'] = isset( $f['area'] ) ? $f['area'] : '';
 		$evidence['path'] = $f['rel'];
+		if ( ! isset( $evidence['verification'] ) ) {
+			$evidence['verification'] = Findings::verification_for( $rule );
+		}
 		if ( Findings::STATUS_OPEN === $status && Settings::is_ignored( $rule, $f['rel'] ) ) {
 			$status = Findings::STATUS_IGNORED;
 		}
