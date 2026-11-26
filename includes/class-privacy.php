@@ -32,7 +32,7 @@ final class Privacy {
 		}
 		$content  = '<p>' . esc_html__( 'This site uses Bee Monitor to detect unauthorized changes and suspicious activity. For accounts with administrative capabilities, Bee Monitor stores the username, a masked email address, and roles so that changes to those accounts can be reported to site administrators.', 'bee-monitor' ) . '</p>';
 		$content .= '<p>' . esc_html__( 'When login monitoring is enabled, Bee Monitor counts failed login attempts and stores only masked network addresses (for example 203.0.113.x) and keyed hashes of attempted usernames. For administrative accounts it stores keyed hashes of the networks they sign in from, to detect sign-ins from new networks.', 'bee-monitor' ) . '</p>';
-		$content .= '<p>' . esc_html__( 'Security findings are kept until an administrator resolves them, then deleted after the retention period configured in Bee Monitor. This data is sent only to the site administrators configured to receive alerts, by email.', 'bee-monitor' ) . '</p>';
+		$content .= '<p>' . esc_html__( 'Security findings are kept until an administrator resolves them, then deleted after the retention period configured in Bee Monitor. This data is sent only to the alert recipients configured in Bee Monitor, by email. Bee Monitor stores those recipient email addresses and a hashed record of which alerts were sent to each.', 'bee-monitor' ) . '</p>';
 		wp_add_privacy_policy_content( 'Bee Monitor', wp_kses_post( $content ) );
 	}
 

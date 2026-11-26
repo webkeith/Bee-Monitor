@@ -56,6 +56,11 @@ final class Plugin {
 		Privacy::register();
 		Context::register();
 		Login_Monitor::register();
+		Site_Health::register();
+		add_filter( 'user_has_cap', array( __CLASS__, 'grant_view_cap' ), 10, 4 );
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			\WP_CLI::add_command( 'bee-monitor', CLI::class );
+		}
 		if ( is_admin() ) {
 			new Admin();
 		}
@@ -72,6 +77,28 @@ final class Plugin {
 		}
 		$plugins = (array) get_site_option( 'active_sitewide_plugins', array() );
 		return isset( $plugins[ plugin_basename( BEE_MONITOR_FILE ) ] );
+	}
+
+	/**
+	 * Grant the read-only bee_monitor_view capability to managers and to configured viewer roles.
+	 *
+	 * @param array    $allcaps All capabilities of the user.
+	 * @param string[] $caps    Required primitive capabilities.
+	 * @param array    $args    Requested capability and arguments.
+	 * @param \WP_User $user    User.
+	 * @return array
+	 */
+	public static function grant_view_cap( $allcaps, $caps, $args, $user ) {
+		if ( ! in_array( 'bee_monitor_view', (array) $caps, true ) ) {
+			return $allcaps;
+		}
+		$manage = is_multisite() ? 'manage_network_options' : 'manage_options';
+		if ( ! empty( $allcaps[ $manage ] ) ) {
+			$allcaps['bee_monitor_view'] = true;
+		} elseif ( ! is_multisite() && $user instanceof \WP_User && array_intersect( (array) $user->roles, (array) Settings::value( 'viewer_roles' ) ) ) {
+			$allcaps['bee_monitor_view'] = true;
+		}
+		return $allcaps;
 	}
 
 	/**
@@ -183,13 +210,43 @@ final class Plugin {
 				}
 				continue;
 			}
-			if ( $event && ! $force && $event->schedule === $recurrence ) {
+			$digest_changed = self::CRON_DIGEST === $hook && Storage::get( 'digest_sig', '' ) !== Settings::digest_signature();
+			if ( $event && ! $force && $event->schedule === $recurrence && ! $digest_changed ) {
 				continue;
 			}
 			wp_clear_scheduled_hook( $hook );
-			$offset = self::CRON_DIGEST === $hook ? HOUR_IN_SECONDS : 5 * MINUTE_IN_SECONDS;
-			wp_schedule_event( time() + $offset, $recurrence, $hook );
+			if ( self::CRON_DIGEST === $hook ) {
+				wp_schedule_event( self::next_digest_time( $recurrence ), $recurrence, $hook );
+				Storage::set( 'digest_sig', Settings::digest_signature() );
+			} else {
+				wp_schedule_event( time() + 5 * MINUTE_IN_SECONDS, $recurrence, $hook );
+			}
 		}
+	}
+
+	/**
+	 * First run of the digest at the configured local time (and weekday for weekly).
+	 *
+	 * @param string $frequency hourly|daily|weekly.
+	 * @return int Unix timestamp.
+	 */
+	public static function next_digest_time( $frequency ) {
+		$now = new \DateTimeImmutable( 'now', wp_timezone() );
+		if ( 'hourly' === $frequency ) {
+			return $now->setTime( (int) $now->format( 'G' ), 0 )->modify( '+1 hour' )->getTimestamp();
+		}
+		$parts = array_map( 'intval', explode( ':', (string) Settings::value( 'digest_time' ) ) );
+		$next  = $now->setTime( isset( $parts[0] ) ? $parts[0] : 8, isset( $parts[1] ) ? $parts[1] : 0 );
+		if ( 'weekly' === $frequency ) {
+			$days = ( (int) Settings::value( 'digest_weekday' ) - (int) $next->format( 'w' ) + 7 ) % 7;
+			$next = $next->modify( '+' . $days . ' days' );
+			if ( $next <= $now ) {
+				$next = $next->modify( '+7 days' );
+			}
+		} elseif ( $next <= $now ) {
+			$next = $next->modify( '+1 day' );
+		}
+		return $next->getTimestamp();
 	}
 
 	/**

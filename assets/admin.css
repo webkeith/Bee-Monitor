@@ -20,3 +20,8 @@
 .bee-monitor-inline{display:inline-block;margin-right:8px}
 .bee-monitor-filter{margin:8px 0;clear:both}
 #bee-monitor-progress{font-weight:600}
+.bee-monitor-recipients td,.bee-monitor-recipients th{vertical-align:top}
+.bee-monitor-recipients td:first-child{min-width:220px}
+.bee-monitor-cat{display:inline-block;width:48%;min-width:200px;margin:0 0 4px}
+.bee-monitor-preview{margin:16px 0;max-width:760px}
+.bee-monitor-preview summary{cursor:pointer;font-weight:600;margin-bottom:10px}

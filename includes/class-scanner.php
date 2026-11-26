@@ -632,9 +632,15 @@ final class Scanner {
 				break;
 
 			case 'self':
-				if ( ! $at_baseline && ! $this->update_window( 'plugin', Paths::component( $f['abs'], 'self' ), $f['mtime'] ) ) {
-					$primary = array( 'self_modified', Findings::CRITICAL, 'confirmed', 'integrity', __( 'A Bee Monitor plugin file changed outside a recorded Bee Monitor update. An attacker may be trying to disable monitoring.', 'bee-monitor' ) );
+				if ( $at_baseline ) {
+					break;
 				}
+				if ( $this->update_window( 'plugin', Paths::component( $f['abs'], 'self' ), $f['mtime'] ) ) {
+					Storage::upsert_baseline( $f['rel'], 'self', $hash, $f['size'], $f['mtime'], $this->state['id'] );
+					$this->note_update( 'self', Paths::component( $f['abs'], 'self' ), $change );
+					return;
+				}
+				$primary = array( 'self_modified', Findings::CRITICAL, 'confirmed', 'integrity', __( 'A Bee Monitor plugin file changed outside a recorded Bee Monitor update. An attacker may be trying to disable monitoring.', 'bee-monitor' ) );
 				break;
 
 			case 'mu':
@@ -889,6 +895,11 @@ final class Scanner {
 				$this->record_file( 'core_file_missing', Findings::HIGH, 'confirmed', 'integrity', 'deleted', $f, __( 'A WordPress core file that existed in the baseline is missing.', 'bee-monitor' ), $evidence, $row['sha256'] );
 				return;
 			case 'self':
+				if ( $this->update_window( 'plugin', Paths::component( $f['abs'], 'self' ), 0 ) ) {
+					Storage::delete_baseline( $f['rel'] );
+					$this->note_update( 'self', Paths::component( $f['abs'], 'self' ), 'deleted' );
+					return;
+				}
 				$this->record_file( 'self_modified', Findings::CRITICAL, 'confirmed', 'integrity', 'deleted', $f, __( 'A Bee Monitor plugin file was deleted outside a recorded update.', 'bee-monitor' ), $evidence, $row['sha256'] );
 				return;
 			case 'config':
@@ -1009,6 +1020,7 @@ final class Scanner {
 		Storage::log( 'info', sprintf( 'Bee Monitor scan #%d finished (%s)', $s['id'], $s['mode'] ), $s['stats'] );
 		Storage::prune_log();
 		Storage::purge_findings( (int) Settings::value( 'retention_days' ) );
+		Storage::prune_deliveries();
 		Plugin::heartbeat();
 		Notifier::dispatch( 'baseline' === $s['mode'] ? 'baseline' : 'scan', $summary );
 	}
@@ -1122,6 +1134,9 @@ final class Scanner {
 	private function record_file( $rule, $severity, $confidence, $basis, $change, array $f, $reason, array $evidence, $key, $status = Findings::STATUS_OPEN ) {
 		$evidence['area'] = isset( $f['area'] ) ? $f['area'] : '';
 		$evidence['path'] = $f['rel'];
+		if ( Findings::STATUS_OPEN === $status && Settings::is_ignored( $rule, $f['rel'] ) ) {
+			$status = Findings::STATUS_IGNORED;
+		}
 		Findings::record(
 			array(
 				'rule'        => $rule,

@@ -4,7 +4,7 @@ Tags: security, malware, file integrity, monitoring, alerts
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 1.0.1
+Stable tag: 1.1.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -23,6 +23,12 @@ Bee Monitor never deletes, quarantines, or modifies files. Every finding is for 
 * **Heuristic indicators (for review, not proof):** web shell and obfuscation patterns, risky server directives, unusual includes in wp-config.php, scheduled tasks or email hooks defined outside plugins and themes, injected scripts in options and posts, failed-login bursts, and privileged logins from new networks.
 
 Each finding shows its basis, severity, and confidence. Legitimate code sometimes matches heuristic patterns.
+
+= Alerts your way =
+
+* Route alerts per recipient: choose categories and the severity that triggers an immediate email; everything else goes to an hourly, daily, or weekly digest at the time you choose.
+* HTML or plain-text emails, a custom From name, From and Reply-To address, a subject label for each site, and a summary mode that leaves code out of emails.
+* Ignore rules for known-noisy paths, read-only access for clients, WordPress Site Health checks, and WP-CLI commands.
 
 = Limitations =
 
@@ -50,6 +56,7 @@ Bee Monitor stores data in its own database tables and options on your site only
 
 * File paths and SHA-256 hashes of monitored files.
 * Findings with short, redacted evidence. Key, salt, password, and credential values are replaced with [redacted]; full file contents are never stored or emailed.
+* Alert recipient email addresses, and a hashed record of which alerts were sent to each.
 * For accounts with administrative capabilities: username, masked email address, and roles.
 * For login monitoring: failure counts, masked networks (for example 203.0.113.x), and keyed hashes of attempted usernames and of the networks administrators sign in from.
 
@@ -85,11 +92,27 @@ The next scan reports the gap, the digest reports monitor health, and the option
 
 On a staging site, create `wp-content/uploads/bee-monitor-canary.php` containing `<?php echo 'canary';`, then click Run scan now. Expect a critical "Executable PHP file in uploads" email. Delete the file and mark the finding Resolved.
 
+= Can I use WP-CLI? =
+
+Yes: `wp bee-monitor scan`, `status`, `findings`, `accept`, `resolve`, `accept-all`, `deploy-window <minutes>`, `test-email`, and `digest`. Run `wp help bee-monitor` for details. A typical deployment: `wp bee-monitor deploy-window 30`, deploy, `wp bee-monitor scan`, then review and `wp bee-monitor accept-all`.
+
+= Can clients see findings without changing anything? =
+
+Yes. Choose roles under Settings > Tamper detection and data > Read-only access (single sites). Those users see the Findings screen only.
+
 = What are the requirements? =
 
 WordPress 6.5+, PHP 7.4+, working email delivery (an SMTP plugin is recommended), and read access to WordPress files. Admin screens require manage_options (manage_network_options on multisite).
 
 == Changelog ==
+
+= 1.1.0 =
+* Per-recipient alert routing by category and severity, with per-recipient hourly limits.
+* HTML emails with a plain-text version, sender settings, subject label, and summary evidence mode.
+* Digest at a chosen time, with a new weekly option.
+* Ignore rules, including "Ignore similar findings in this folder".
+* Read-only access for chosen roles, Site Health tests, and WP-CLI commands with a deployment window.
+* Upgrading from 1.0.x keeps your existing recipients and alert threshold.
 
 = 1.0.1 =
 * Escaping applied at output on all admin screens.

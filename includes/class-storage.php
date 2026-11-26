@@ -43,6 +43,8 @@ final class Storage {
 		'heartbeat_status',
 		'login_bucket',
 		'trusted_urls',
+		'deploy_until',
+		'digest_sig',
 	);
 
 	/**
@@ -108,6 +110,7 @@ final class Storage {
 		$baseline = self::table( 'baseline' );
 		$findings = self::table( 'findings' );
 		$log      = self::table( 'log' );
+		$delivery = self::table( 'deliveries' );
 
 		dbDelta(
 			"CREATE TABLE {$baseline} (
@@ -167,6 +170,18 @@ final class Storage {
 			) {$charset};"
 		);
 
+		dbDelta(
+			"CREATE TABLE {$delivery} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				finding_id bigint(20) unsigned NOT NULL,
+				recipient char(32) NOT NULL,
+				kind varchar(16) NOT NULL DEFAULT 'immediate',
+				sent_at datetime NOT NULL DEFAULT '1970-01-01 00:00:00',
+				PRIMARY KEY  (id),
+				KEY finding_recipient (finding_id,recipient)
+			) {$charset};"
+		);
+
 		self::set( 'db_version', BEE_MONITOR_DB_VERSION );
 	}
 
@@ -190,7 +205,7 @@ final class Storage {
 		if ( true === $exists ) {
 			return true;
 		}
-		foreach ( array( 'baseline', 'findings', 'log' ) as $name ) {
+		foreach ( array( 'baseline', 'findings', 'log', 'deliveries' ) as $name ) {
 			$table = self::table( $name );
 			$found = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
 			if ( $found !== $table ) {
@@ -480,6 +495,72 @@ final class Storage {
 			$out[ $row['area'] ] = (int) $row['total'];
 		}
 		return $out;
+	}
+
+	/**
+	 * Hash identifying a recipient without storing the address.
+	 *
+	 * @param string $email Email.
+	 * @return string
+	 */
+	public static function recipient_key( $email ) {
+		return md5( strtolower( trim( (string) $email ) ) );
+	}
+
+	/**
+	 * Record deliveries of findings to a recipient.
+	 *
+	 * @param int[]  $ids   Finding IDs.
+	 * @param string $email Recipient.
+	 * @param string $kind  immediate|digest.
+	 */
+	public static function record_deliveries( array $ids, $email, $kind ) {
+		global $wpdb;
+		$key = self::recipient_key( $email );
+		$now = current_time( 'mysql', true );
+		foreach ( array_unique( array_map( 'absint', $ids ) ) as $id ) {
+			if ( $id ) {
+				$wpdb->insert(
+					self::table( 'deliveries' ),
+					array(
+						'finding_id' => $id,
+						'recipient'  => $key,
+						'kind'       => substr( sanitize_key( $kind ), 0, 16 ),
+						'sent_at'    => $now,
+					),
+					array( '%d', '%s', '%s', '%s' )
+				);
+			}
+		}
+	}
+
+	/**
+	 * Which recipients each finding has been delivered to.
+	 *
+	 * @param int[] $ids Finding IDs.
+	 * @return array finding_id => [ recipient_key => true ].
+	 */
+	public static function delivered_map( array $ids ) {
+		global $wpdb;
+		$ids = array_values( array_filter( array_map( 'absint', $ids ) ) );
+		$map = array();
+		if ( empty( $ids ) ) {
+			return $map;
+		}
+		$placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+		$rows         = $wpdb->get_results( $wpdb->prepare( "SELECT finding_id, recipient FROM %i WHERE finding_id IN ({$placeholders})", array_merge( array( self::table( 'deliveries' ) ), $ids ) ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- one placeholder per ID.
+		foreach ( (array) $rows as $row ) {
+			$map[ (int) $row['finding_id'] ][ $row['recipient'] ] = true;
+		}
+		return $map;
+	}
+
+	/**
+	 * Remove delivery records of findings that no longer exist.
+	 */
+	public static function prune_deliveries() {
+		global $wpdb;
+		$wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE finding_id NOT IN ( SELECT id FROM %i )', self::table( 'deliveries' ), self::table( 'findings' ) ) );
 	}
 
 	/**

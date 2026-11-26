@@ -31,6 +31,34 @@
 		} );
 	} );
 
+	var addRecipient = document.getElementById( 'bee-monitor-add-recipient' );
+	var recipientRows = document.getElementById( 'bee-monitor-recipient-rows' );
+	var recipientTemplate = document.getElementById( 'bee-monitor-recipient-template' );
+	if ( addRecipient && recipientRows && recipientTemplate ) {
+		addRecipient.addEventListener( 'click', function () {
+			var index = 'n' + Date.now();
+			var html = recipientTemplate.innerHTML.split( '__INDEX__' ).join( index );
+			var holder = document.createElement( 'tbody' );
+			holder.innerHTML = html;
+			var row = holder.querySelector( 'tr' );
+			recipientRows.appendChild( row );
+			var email = row.querySelector( 'input[type="email"]' );
+			if ( email ) {
+				email.focus();
+			}
+		} );
+		recipientRows.addEventListener( 'click', function ( event ) {
+			var button = event.target.closest( '.bee-monitor-remove-recipient' );
+			if ( button ) {
+				var row = button.closest( 'tr' );
+				if ( row ) {
+					row.parentNode.removeChild( row );
+					addRecipient.focus();
+				}
+			}
+		} );
+	}
+
 	var runButton = document.getElementById( 'bee-monitor-run' );
 	var progress = document.getElementById( 'bee-monitor-progress' );
 	if ( ! runButton || ! progress ) {

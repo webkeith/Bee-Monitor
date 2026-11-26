@@ -26,6 +26,43 @@ final class Findings {
 	const STATUS_EXPECTED = 'expected';
 	const STATUS_RESOLVED = 'resolved';
 	const STATUS_AUTO     = 'auto';
+	const STATUS_IGNORED  = 'ignored';
+
+	const CATEGORIES = array( 'files', 'core', 'users', 'options', 'cron', 'content', 'logins', 'monitor' );
+
+	const CATEGORY_MAP = array(
+		'core_checksum_mismatch'      => 'core',
+		'core_unknown_file'           => 'core',
+		'core_file_missing'           => 'core',
+		'core_file_updated'           => 'core',
+		'privileged_user_added'       => 'users',
+		'privileged_role_changed'     => 'users',
+		'privileged_email_changed'    => 'users',
+		'privileged_user_removed'     => 'users',
+		'role_capabilities_changed'   => 'users',
+		'site_url_changed'            => 'options',
+		'admin_email_changed'         => 'options',
+		'registration_opened'         => 'options',
+		'default_role_changed'        => 'options',
+		'plugin_activated'            => 'options',
+		'plugin_deactivated'          => 'options',
+		'theme_changed'               => 'options',
+		'cron_hook_added'             => 'cron',
+		'cron_suspicious_callback'    => 'cron',
+		'injected_option_content'     => 'content',
+		'injected_post_script'        => 'content',
+		'failed_login_burst'          => 'logins',
+		'privileged_login_new_net'    => 'logins',
+		'baseline_tampered'           => 'monitor',
+		'baseline_missing'            => 'monitor',
+		'baseline_key_changed'        => 'monitor',
+		'storage_unavailable'         => 'monitor',
+		'self_modified'               => 'monitor',
+		'settings_changed'            => 'monitor',
+		'settings_changed_externally' => 'monitor',
+		'scan_gap'                    => 'monitor',
+		'mail_filter_suspicious'      => 'monitor',
+	);
 
 	/**
 	 * Record a finding, deduplicating by fingerprint.
@@ -222,7 +259,7 @@ final class Findings {
 	public static function set_status( array $ids, $status, $note, $user_id ) {
 		global $wpdb;
 		$ids = array_filter( array_map( 'absint', $ids ) );
-		if ( empty( $ids ) || ! in_array( $status, array( self::STATUS_OPEN, self::STATUS_EXPECTED, self::STATUS_RESOLVED ), true ) ) {
+		if ( empty( $ids ) || ! in_array( $status, array( self::STATUS_OPEN, self::STATUS_EXPECTED, self::STATUS_RESOLVED, self::STATUS_IGNORED ), true ) ) {
 			return 0;
 		}
 		$table        = Storage::table( 'findings' );
@@ -342,9 +379,40 @@ final class Findings {
 				'expected' => __( 'Expected', 'bee-monitor' ),
 				'resolved' => __( 'Resolved', 'bee-monitor' ),
 				'auto'     => __( 'Auto-verified', 'bee-monitor' ),
+				'ignored'  => __( 'Ignored', 'bee-monitor' ),
 			),
 		);
 		return isset( $terms[ $group ][ $key ] ) ? $terms[ $group ][ $key ] : $key;
+	}
+
+	/**
+	 * Email category of a rule. Unlisted rules are file findings.
+	 *
+	 * @param string $rule Rule ID.
+	 * @return string
+	 */
+	public static function category( $rule ) {
+		return isset( self::CATEGORY_MAP[ $rule ] ) ? self::CATEGORY_MAP[ $rule ] : 'files';
+	}
+
+	/**
+	 * Translated category label.
+	 *
+	 * @param string $category Category key.
+	 * @return string
+	 */
+	public static function category_label( $category ) {
+		$labels = array(
+			'files'   => __( 'File changes and malware indicators', 'bee-monitor' ),
+			'core'    => __( 'WordPress core integrity', 'bee-monitor' ),
+			'users'   => __( 'Users and roles', 'bee-monitor' ),
+			'options' => __( 'Site settings, plugins, and theme', 'bee-monitor' ),
+			'cron'    => __( 'Scheduled tasks', 'bee-monitor' ),
+			'content' => __( 'Content injection', 'bee-monitor' ),
+			'logins'  => __( 'Login activity', 'bee-monitor' ),
+			'monitor' => __( 'Monitor health and tampering', 'bee-monitor' ),
+		);
+		return isset( $labels[ $category ] ) ? $labels[ $category ] : $category;
 	}
 
 	/**

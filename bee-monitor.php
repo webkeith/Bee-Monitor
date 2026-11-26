@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Bee Monitor
  * Description:       Monitors PHP files, WordPress core integrity, and key site settings for signs of malware, unauthorized changes, or injection, and emails clear alerts. Bee Monitor reports findings only; it never deletes, quarantines, or modifies files.
- * Version:           1.0.1
+ * Version:           1.1.0
  * Requires at least: 6.5
  * Requires PHP:      7.4
  * Author:            Keith Quinones
@@ -16,8 +16,8 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'BEE_MONITOR_VERSION', '1.0.1' );
-define( 'BEE_MONITOR_DB_VERSION', '1' );
+define( 'BEE_MONITOR_VERSION', '1.1.0' );
+define( 'BEE_MONITOR_DB_VERSION', '2' );
 define( 'BEE_MONITOR_FILE', __FILE__ );
 define( 'BEE_MONITOR_DIR', plugin_dir_path( __FILE__ ) );
 define( 'BEE_MONITOR_URL', plugin_dir_url( __FILE__ ) );
@@ -34,6 +34,8 @@ require_once BEE_MONITOR_DIR . 'includes/class-login-monitor.php';
 require_once BEE_MONITOR_DIR . 'includes/class-scanner.php';
 require_once BEE_MONITOR_DIR . 'includes/class-notifier.php';
 require_once BEE_MONITOR_DIR . 'includes/class-privacy.php';
+require_once BEE_MONITOR_DIR . 'includes/class-site-health.php';
+require_once BEE_MONITOR_DIR . 'includes/class-cli.php';
 require_once BEE_MONITOR_DIR . 'includes/class-plugin.php';
 require_once BEE_MONITOR_DIR . 'includes/class-admin.php';
 

@@ -43,6 +43,24 @@ final class Admin {
 	}
 
 	/**
+	 * Capability to view findings (read-only). Multisite keeps network-admin-only access.
+	 *
+	 * @return string
+	 */
+	public static function view_capability() {
+		return is_multisite() ? self::capability() : 'bee_monitor_view';
+	}
+
+	/**
+	 * Whether the current user can manage (not just view) Bee Monitor.
+	 *
+	 * @return bool
+	 */
+	private static function can_manage() {
+		return current_user_can( self::capability() );
+	}
+
+	/**
 	 * URL of a Bee Monitor admin page.
 	 *
 	 * @param string $page Page slug.
@@ -74,8 +92,9 @@ final class Admin {
 		$urgent = $counts[ Findings::CRITICAL ] + $counts[ Findings::HIGH ];
 		$badge  = $urgent ? ' <span class="awaiting-mod"><span class="pending-count">' . (int) $urgent . '</span></span>' : '';
 
-		add_menu_page( __( 'Bee Monitor', 'bee-monitor' ), __( 'Bee Monitor', 'bee-monitor' ) . $badge, $cap, 'bee-monitor', array( $this, 'page_findings' ), 'dashicons-shield-alt', 81 );
-		add_submenu_page( 'bee-monitor', __( 'Bee Monitor Findings', 'bee-monitor' ), __( 'Findings', 'bee-monitor' ), $cap, 'bee-monitor', array( $this, 'page_findings' ) );
+		$view = self::view_capability();
+		add_menu_page( __( 'Bee Monitor', 'bee-monitor' ), __( 'Bee Monitor', 'bee-monitor' ) . $badge, $view, 'bee-monitor', array( $this, 'page_findings' ), 'dashicons-shield-alt', 81 );
+		add_submenu_page( 'bee-monitor', __( 'Bee Monitor Findings', 'bee-monitor' ), __( 'Findings', 'bee-monitor' ), $view, 'bee-monitor', array( $this, 'page_findings' ) );
 		add_submenu_page( 'bee-monitor', __( 'Bee Monitor Baseline', 'bee-monitor' ), __( 'Baseline', 'bee-monitor' ), $cap, 'bee-monitor-baseline', array( $this, 'page_baseline' ) );
 		add_submenu_page( 'bee-monitor', __( 'Bee Monitor Settings', 'bee-monitor' ), __( 'Settings', 'bee-monitor' ), $cap, 'bee-monitor-settings', array( $this, 'page_settings' ) );
 		add_submenu_page( 'bee-monitor', __( 'Bee Monitor Tools', 'bee-monitor' ), __( 'Tools & Status', 'bee-monitor' ), $cap, 'bee-monitor-tools', array( $this, 'page_tools' ) );
@@ -250,17 +269,31 @@ final class Admin {
 			array( 'content_domain_allowlist', 'bee_monitor_checks', 'textarea', __( 'Trusted script domains', 'bee-monitor' ), __( 'One per line, for example your analytics or tag manager domain. Subdomains are included. Your own domain is always trusted.', 'bee-monitor' ) ),
 			array( 'monitor_logins', 'bee_monitor_checks', 'checkbox', __( 'Monitor login activity', 'bee-monitor' ), __( 'Uses REMOTE_ADDR only. Behind a proxy or CDN, all visitors may appear to come from the proxy.', 'bee-monitor' ) ),
 			array( 'failed_login_threshold', 'bee_monitor_checks', 'number', __( 'Failed logins per 15 minutes before alerting', 'bee-monitor' ), '' ),
-			array( 'recipients', 'bee_monitor_alerts', 'text', __( 'Alert recipients', 'bee-monitor' ), __( 'Comma-separated. Leave empty to use the site administration email.', 'bee-monitor' ) ),
+			array( 'recipient_rows', 'bee_monitor_alerts', 'recipients', __( 'Recipients and routing', 'bee-monitor' ), __( 'Each recipient gets findings in the chosen categories immediately at or above their severity, and everything else in the digest if enabled. Leave empty to use the site administration email.', 'bee-monitor' ) ),
+			array( 'from_name', 'bee_monitor_alerts', 'text', __( 'From name', 'bee-monitor' ), '' ),
+			array( 'from_email', 'bee_monitor_alerts', 'text', __( 'From address', 'bee-monitor' ), __( 'Optional. Leave empty to use the address your email or SMTP plugin sends from. Use an address on this site\'s domain for reliable delivery.', 'bee-monitor' ) ),
+			array( 'reply_to', 'bee_monitor_alerts', 'text', __( 'Reply-To address', 'bee-monitor' ), __( 'Optional, for example your support inbox.', 'bee-monitor' ) ),
+			array( 'subject_label', 'bee_monitor_alerts', 'text', __( 'Subject label', 'bee-monitor' ), __( 'Shown in subjects instead of the site name, for example a client code. Up to 40 characters.', 'bee-monitor' ) ),
 			array(
-				'immediate_severity',
+				'email_format',
 				'bee_monitor_alerts',
 				'select',
-				__( 'Send immediately at or above', 'bee-monitor' ),
-				__( 'Lower-severity findings go into the digest.', 'bee-monitor' ),
+				__( 'Email format', 'bee-monitor' ),
+				'',
 				array(
-					'critical' => __( 'Critical', 'bee-monitor' ),
-					'high'     => __( 'High', 'bee-monitor' ),
-					'medium'   => __( 'Medium', 'bee-monitor' ),
+					'html' => __( 'HTML with plain-text version', 'bee-monitor' ),
+					'text' => __( 'Plain text only', 'bee-monitor' ),
+				),
+			),
+			array(
+				'evidence_detail',
+				'bee_monitor_alerts',
+				'select',
+				__( 'Evidence in emails', 'bee-monitor' ),
+				__( 'Summary leaves out code snippets and hashes, for recipients who should not receive code by email.', 'bee-monitor' ),
+				array(
+					'full'    => __( 'Full (redacted snippets and hashes)', 'bee-monitor' ),
+					'summary' => __( 'Summary (path, reason, next steps)', 'bee-monitor' ),
 				),
 			),
 			array(
@@ -272,16 +305,30 @@ final class Admin {
 				array(
 					'hourly' => __( 'Hourly', 'bee-monitor' ),
 					'daily'  => __( 'Daily', 'bee-monitor' ),
-					'off'    => __( 'Off (lower-severity findings are not emailed)', 'bee-monitor' ),
+					'weekly' => __( 'Weekly', 'bee-monitor' ),
+					'off'    => __( 'Off (findings below each recipient\'s threshold are not emailed)', 'bee-monitor' ),
 				),
 			),
+			array( 'digest_time', 'bee_monitor_alerts', 'time', __( 'Digest time', 'bee-monitor' ), __( 'In the site timezone. Used for daily and weekly digests.', 'bee-monitor' ) ),
+			array(
+				'digest_weekday',
+				'bee_monitor_alerts',
+				'select',
+				__( 'Weekly digest day', 'bee-monitor' ),
+				'',
+				self::weekdays(),
+			),
 			array( 'digest_all_clear', 'bee_monitor_alerts', 'checkbox', __( 'Send digest even when there is nothing new', 'bee-monitor' ), __( 'A regular "all clear" email confirms monitoring is still running.', 'bee-monitor' ) ),
-			array( 'max_emails_per_hour', 'bee_monitor_alerts', 'number', __( 'Maximum emails per hour', 'bee-monitor' ), __( 'Extra findings are held and included in the next email.', 'bee-monitor' ) ),
+			array( 'max_emails_per_hour', 'bee_monitor_alerts', 'number', __( 'Maximum emails per hour, per recipient', 'bee-monitor' ), __( 'Extra findings are held and included in the next email.', 'bee-monitor' ) ),
 			array( 'reminder_days', 'bee_monitor_alerts', 'number', __( 'Remind about open high and critical findings every (days)', 'bee-monitor' ), __( '0 turns reminders off.', 'bee-monitor' ) ),
+			array( 'ignore_rules', 'bee_monitor_scope', 'textarea', __( 'Ignore rules', 'bee-monitor' ), __( 'One rule per line: a finding type and a path pattern, for example "suspicious_code wp-content/plugins/my-plugin/vendor/*". Matching findings are recorded as Ignored and not emailed. Use "*" as the type to ignore every type (not recommended).', 'bee-monitor' ) ),
 			array( 'retention_days', 'bee_monitor_advanced', 'number', __( 'Delete closed findings after (days)', 'bee-monitor' ), __( 'Resolved, expected, and auto-verified findings not seen for this many days are deleted. Open findings are never deleted automatically. 0 keeps them forever.', 'bee-monitor' ) ),
 			array( 'heartbeat_url', 'bee_monitor_advanced', 'url', __( 'Heartbeat URL', 'bee-monitor' ), __( 'Optional https URL pinged after every completed scan (for example, a Healthchecks.io check). If pings stop, that service alerts you, even when this site is compromised or offline.', 'bee-monitor' ) ),
 			array( 'delete_data_on_uninstall', 'bee_monitor_advanced', 'checkbox', __( 'Delete all Bee Monitor data on uninstall', 'bee-monitor' ), __( 'When off (default), findings, baseline, and settings are kept if the plugin is deleted, so history survives a reinstall.', 'bee-monitor' ) ),
 		);
+		if ( ! is_multisite() ) {
+			$fields[] = array( 'viewer_roles', 'bee_monitor_advanced', 'roles', __( 'Read-only access', 'bee-monitor' ), __( 'Users with these roles can view findings but cannot change settings, accept changes, or run scans. Useful for clients.', 'bee-monitor' ) );
+		}
 		foreach ( $fields as $field ) {
 			add_settings_field(
 				'bee_monitor_' . $field[0],
@@ -294,7 +341,7 @@ final class Admin {
 					'type'      => $field[2],
 					'help'      => $field[4],
 					'choices'   => isset( $field[5] ) ? $field[5] : array(),
-					'label_for' => 'checkbox' === $field[2] ? null : 'bee-monitor-' . $field[0],
+					'label_for' => in_array( $field[2], array( 'checkbox', 'recipients', 'roles' ), true ) ? null : 'bee-monitor-' . $field[0],
 				)
 			);
 		}
@@ -329,6 +376,20 @@ final class Admin {
 			case 'number':
 				printf( '<input type="number" id="%1$s" name="%2$s" value="%3$s" class="small-text" min="0" aria-describedby="%4$s">', esc_attr( $id ), esc_attr( $name ), esc_attr( (string) $value ), esc_attr( $descr ) );
 				break;
+			case 'time':
+				printf( '<input type="time" id="%1$s" name="%2$s" value="%3$s" aria-describedby="%4$s">', esc_attr( $id ), esc_attr( $name ), esc_attr( (string) $value ), esc_attr( $descr ) );
+				break;
+			case 'recipients':
+				$this->render_recipients( (array) $value );
+				break;
+			case 'roles':
+				foreach ( wp_roles()->roles as $role => $data ) {
+					if ( ! empty( $data['capabilities']['manage_options'] ) ) {
+						continue;
+					}
+					printf( '<label style="display:inline-block;margin:0 14px 6px 0;"><input type="checkbox" name="%1$s[]" value="%2$s" %3$s> %4$s</label>', esc_attr( $name ), esc_attr( $role ), checked( in_array( $role, (array) $value, true ), true, false ), esc_html( translate_user_role( $data['name'] ) ) );
+				}
+				break;
 			case 'url':
 				printf( '<input type="url" id="%1$s" name="%2$s" value="%3$s" class="regular-text code" placeholder="https://" aria-describedby="%4$s">', esc_attr( $id ), esc_attr( $name ), esc_attr( (string) $value ), esc_attr( $descr ) );
 				break;
@@ -344,6 +405,74 @@ final class Admin {
 				echo '<p class="bee-monitor-warning">' . esc_html__( 'These exclusions hide high-risk locations:', 'bee-monitor' ) . ' <code>' . esc_html( implode( '</code>, <code>', $risky ) ) . '</code></p>';
 			}
 		}
+	}
+
+	/**
+	 * Weekday choices.
+	 *
+	 * @return array
+	 */
+	private static function weekdays() {
+		global $wp_locale;
+		$days = array();
+		for ( $i = 0; $i < 7; $i++ ) {
+			$days[ (string) $i ] = $wp_locale ? $wp_locale->get_weekday( $i ) : (string) $i;
+		}
+		return $days;
+	}
+
+	/**
+	 * Recipient routing table.
+	 *
+	 * @param array $rows Rows.
+	 */
+	private function render_recipients( array $rows ) {
+		$severities = array(
+			'critical' => __( 'Critical only', 'bee-monitor' ),
+			'high'     => __( 'High and above', 'bee-monitor' ),
+			'medium'   => __( 'Medium and above', 'bee-monitor' ),
+			'low'      => __( 'Everything', 'bee-monitor' ),
+		);
+		echo '<table class="widefat bee-monitor-recipients"><thead><tr>';
+		echo '<th scope="col">' . esc_html__( 'Email', 'bee-monitor' ) . '</th><th scope="col">' . esc_html__( 'Send immediately', 'bee-monitor' ) . '</th><th scope="col">' . esc_html__( 'Digest', 'bee-monitor' ) . '</th><th scope="col">' . esc_html__( 'Categories', 'bee-monitor' ) . '</th><th scope="col"><span class="screen-reader-text">' . esc_html__( 'Remove', 'bee-monitor' ) . '</span></th>';
+		echo '</tr></thead><tbody id="bee-monitor-recipient-rows">';
+		$index = 0;
+		foreach ( $rows as $row ) {
+			$this->render_recipient_row( (string) $index, $row, $severities );
+			++$index;
+		}
+		echo '</tbody></table>';
+		echo '<template id="bee-monitor-recipient-template">';
+		$this->render_recipient_row( '__INDEX__', Settings::default_row( '', 'high' ), $severities );
+		echo '</template>';
+		echo '<p><button type="button" class="button" id="bee-monitor-add-recipient">' . esc_html__( 'Add recipient', 'bee-monitor' ) . '</button></p>';
+	}
+
+	/**
+	 * One recipient row.
+	 *
+	 * @param string $index      Row index.
+	 * @param array  $row        Row.
+	 * @param array  $severities Severity choices.
+	 */
+	private function render_recipient_row( $index, array $row, array $severities ) {
+		$base = 'bee_monitor[recipient_rows][' . $index . ']';
+		$id   = 'bee-monitor-r-' . $index;
+		echo '<tr class="bee-monitor-recipient">';
+		printf( '<td><label class="screen-reader-text" for="%1$s-email">%2$s</label><input type="email" class="regular-text" id="%1$s-email" name="%3$s[email]" value="%4$s"></td>', esc_attr( $id ), esc_html__( 'Email', 'bee-monitor' ), esc_attr( $base ), esc_attr( (string) $row['email'] ) );
+		printf( '<td><label class="screen-reader-text" for="%1$s-min">%2$s</label><select id="%1$s-min" name="%3$s[min_severity]">', esc_attr( $id ), esc_html__( 'Send immediately', 'bee-monitor' ), esc_attr( $base ) );
+		foreach ( $severities as $key => $label ) {
+			printf( '<option value="%1$s" %2$s>%3$s</option>', esc_attr( $key ), selected( $row['min_severity'], $key, false ), esc_html( $label ) );
+		}
+		echo '</select></td>';
+		printf( '<td><label><input type="checkbox" name="%1$s[digest]" value="1" %2$s> %3$s</label></td>', esc_attr( $base ), checked( ! empty( $row['digest'] ), true, false ), esc_html__( 'Include', 'bee-monitor' ) );
+		echo '<td><fieldset><legend class="screen-reader-text">' . esc_html__( 'Categories', 'bee-monitor' ) . '</legend>';
+		foreach ( Findings::CATEGORIES as $cat ) {
+			printf( '<label class="bee-monitor-cat"><input type="checkbox" name="%1$s[categories][]" value="%2$s" %3$s> %4$s</label>', esc_attr( $base ), esc_attr( $cat ), checked( in_array( $cat, (array) $row['categories'], true ), true, false ), esc_html( Findings::category_label( $cat ) ) );
+		}
+		echo '</fieldset></td>';
+		echo '<td><button type="button" class="button-link bee-monitor-remove-recipient">' . esc_html__( 'Remove', 'bee-monitor' ) . '</button></td>';
+		echo '</tr>';
 	}
 
 	/**
@@ -371,8 +500,8 @@ final class Admin {
 		$new    = $result['settings'];
 
 		$changed = array();
-		foreach ( array( 'enabled', 'exclusions', 'recipients', 'extra_extensions', 'auto_accept_updates', 'core_checksums', 'heartbeat_url' ) as $key ) {
-			if ( (string) $old[ $key ] !== (string) $new[ $key ] ) {
+		foreach ( array( 'enabled', 'exclusions', 'recipient_rows', 'ignore_rules', 'viewer_roles', 'from_email', 'extra_extensions', 'auto_accept_updates', 'core_checksums', 'heartbeat_url' ) as $key ) {
+			if ( wp_json_encode( isset( $old[ $key ] ) ? $old[ $key ] : '' ) !== wp_json_encode( $new[ $key ] ) ) {
 				$changed[] = $key;
 			}
 		}
@@ -385,7 +514,7 @@ final class Admin {
 			Findings::record(
 				array(
 					'rule'        => 'settings_changed',
-					'severity'    => array_intersect( $changed, array( 'enabled', 'exclusions', 'recipients' ) ) ? Findings::MEDIUM : Findings::LOW,
+					'severity'    => array_intersect( $changed, array( 'enabled', 'exclusions', 'recipient_rows', 'ignore_rules' ) ) ? Findings::MEDIUM : Findings::LOW,
 					'confidence'  => 'confirmed',
 					'basis'       => 'monitor',
 					'change_type' => 'changed',
@@ -428,12 +557,13 @@ final class Admin {
 		$min_sev = isset( $_GET['min_severity'] ) ? absint( $_GET['min_severity'] ) : Findings::LOW;
 		$paged   = isset( $_GET['paged'] ) ? max( 1, absint( $_GET['paged'] ) ) : 1;
 		// phpcs:enable
-		if ( ! in_array( $status, array( 'open', 'expected', 'resolved', 'auto', 'all' ), true ) ) {
+		if ( ! in_array( $status, array( 'open', 'expected', 'resolved', 'auto', 'ignored', 'all' ), true ) ) {
 			$status = 'open';
 		}
 		$min_sev = min( Findings::CRITICAL, $min_sev );
 
-		$this->header( __( 'Bee Monitor', 'bee-monitor' ) );
+		$this->header( __( 'Bee Monitor', 'bee-monitor' ), self::view_capability() );
+		$manage = self::can_manage();
 		$this->summary_cards();
 
 		echo '<h2 class="screen-reader-text">' . esc_html__( 'Filter findings', 'bee-monitor' ) . '</h2><ul class="subsubsub">';
@@ -442,6 +572,7 @@ final class Admin {
 			'expected' => Findings::term( 'status', 'expected' ),
 			'resolved' => Findings::term( 'status', 'resolved' ),
 			'auto'     => Findings::term( 'status', 'auto' ),
+			'ignored'  => Findings::term( 'status', 'ignored' ),
 			'all'      => __( 'All', 'bee-monitor' ),
 		);
 		$last = array_key_last( $tabs );
@@ -483,23 +614,29 @@ final class Admin {
 			)
 		);
 
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
-		echo '<input type="hidden" name="action" value="bee_monitor_findings">';
-		wp_nonce_field( 'bee_monitor_findings' );
-		$this->bulk_controls( 'top' );
+		if ( $manage ) {
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+			echo '<input type="hidden" name="action" value="bee_monitor_findings">';
+			wp_nonce_field( 'bee_monitor_findings' );
+			$this->bulk_controls( 'top' );
+		}
 		echo '<table class="wp-list-table widefat fixed striped bee-monitor-table"><caption class="screen-reader-text">' . esc_html__( 'Findings', 'bee-monitor' ) . '</caption><thead><tr>';
-		echo '<td class="manage-column column-cb check-column"><label class="screen-reader-text" for="bee-monitor-select-all">' . esc_html__( 'Select all', 'bee-monitor' ) . '</label><input type="checkbox" id="bee-monitor-select-all" class="bee-monitor-select-all"></td>';
+		if ( $manage ) {
+			echo '<td class="manage-column column-cb check-column"><label class="screen-reader-text" for="bee-monitor-select-all">' . esc_html__( 'Select all', 'bee-monitor' ) . '</label><input type="checkbox" id="bee-monitor-select-all" class="bee-monitor-select-all"></td>';
+		}
 		foreach ( array( __( 'Severity', 'bee-monitor' ), __( 'Finding', 'bee-monitor' ), __( 'Affected', 'bee-monitor' ), __( 'Confidence', 'bee-monitor' ), __( 'Last seen', 'bee-monitor' ), __( 'Status', 'bee-monitor' ) ) as $col ) {
 			echo '<th scope="col">' . esc_html( $col ) . '</th>';
 		}
 		echo '</tr></thead><tbody>';
 		if ( empty( $result['items'] ) ) {
-			echo '<tr><td colspan="7">' . esc_html__( 'No findings match this view.', 'bee-monitor' ) . '</td></tr>';
+			echo '<tr><td colspan="' . esc_attr( $manage ? '7' : '6' ) . '">' . esc_html__( 'No findings match this view.', 'bee-monitor' ) . '</td></tr>';
 		}
 		foreach ( $result['items'] as $item ) {
 			$url = self::page_url( 'bee-monitor', array( 'finding' => $item['id'] ) );
 			echo '<tr>';
-			printf( '<th scope="row" class="check-column"><label class="screen-reader-text" for="bm-f-%1$d">%2$s</label><input type="checkbox" id="bm-f-%1$d" name="ids[]" value="%1$d"></th>', (int) $item['id'], esc_html__( 'Select finding', 'bee-monitor' ) );
+			if ( $manage ) {
+				printf( '<th scope="row" class="check-column"><label class="screen-reader-text" for="bm-f-%1$d">%2$s</label><input type="checkbox" id="bm-f-%1$d" name="ids[]" value="%1$d"></th>', (int) $item['id'], esc_html__( 'Select finding', 'bee-monitor' ) );
+			}
 			echo '<td>';
 			$this->print_badge( $item['severity'] );
 			echo '</td>';
@@ -516,8 +653,10 @@ final class Admin {
 			echo '</tr>';
 		}
 		echo '</tbody></table>';
-		$this->bulk_controls( 'bottom' );
-		echo '</form>';
+		if ( $manage ) {
+			$this->bulk_controls( 'bottom' );
+			echo '</form>';
+		}
 
 		$pages = (int) ceil( $result['total'] / self::PER_PAGE );
 		if ( $pages > 1 ) {
@@ -573,7 +712,7 @@ final class Admin {
 	 */
 	private function page_finding( $id ) {
 		$item = Findings::get( $id );
-		$this->header( __( 'Bee Monitor Finding', 'bee-monitor' ) );
+		$this->header( __( 'Bee Monitor Finding', 'bee-monitor' ), self::view_capability() );
 		echo '<p><a href="' . esc_url( self::page_url( 'bee-monitor' ) ) . '">&larr; ' . esc_html__( 'Back to findings', 'bee-monitor' ) . '</a></p>';
 		if ( ! $item ) {
 			echo '<p>' . esc_html__( 'Finding not found.', 'bee-monitor' ) . '</p></div>';
@@ -602,6 +741,10 @@ final class Admin {
 		$this->render_evidence( $item['evidence'] );
 		echo '</td></tr></tbody></table>';
 
+		if ( ! self::can_manage() ) {
+			echo '</div>';
+			return;
+		}
 		echo '<h3>' . esc_html__( 'Update this finding', 'bee-monitor' ) . '</h3>';
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="bee-monitor-actions">';
 		echo '<input type="hidden" name="action" value="bee_monitor_findings"><input type="hidden" name="ids[]" value="' . (int) $item['id'] . '"><input type="hidden" name="return" value="detail">';
@@ -615,6 +758,12 @@ final class Admin {
 		submit_button( __( 'Mark resolved', 'bee-monitor' ), 'secondary', 'single_resolved', false );
 		echo ' ';
 		submit_button( __( 'Reopen', 'bee-monitor' ), 'secondary', 'single_open', false );
+		if ( ! empty( $item['evidence']['path'] ) ) {
+			echo ' ';
+			submit_button( __( 'Ignore similar findings in this folder', 'bee-monitor' ), 'secondary', 'single_ignore', false );
+			/* translators: %s: ignore rule. */
+			echo '<br><span class="description">' . esc_html( sprintf( __( 'Adds the ignore rule "%s". Future findings of this type in this folder are recorded as Ignored and not emailed.', 'bee-monitor' ), self::ignore_rule_for( $item ) ) ) . '</span>';
+		}
 		echo '</p></form></div>';
 	}
 
@@ -653,6 +802,54 @@ final class Admin {
 	}
 
 	/**
+	 * Ignore rule covering a finding's rule in its folder.
+	 *
+	 * @param array $item Finding.
+	 * @return string
+	 */
+	private static function ignore_rule_for( array $item ) {
+		$dir = dirname( (string) $item['evidence']['path'] );
+		return $item['rule'] . ' ' . ( '.' === $dir ? '' : $dir . '/' ) . '*';
+	}
+
+	/**
+	 * Add an ignore rule for a finding and mark it ignored.
+	 *
+	 * @param int $id Finding ID.
+	 */
+	private function ignore_similar( $id ) {
+		$item = Findings::get( $id );
+		if ( ! $item || empty( $item['evidence']['path'] ) ) {
+			return;
+		}
+		$rule     = self::ignore_rule_for( $item );
+		$settings = Settings::get();
+		$lines    = array_filter( array_map( 'trim', explode( "\n", (string) $settings['ignore_rules'] ) ) );
+		if ( ! in_array( $rule, $lines, true ) ) {
+			$lines[]                  = $rule;
+			$settings['ignore_rules'] = implode( "\n", $lines );
+			Settings::save( $settings );
+			Findings::record(
+				array(
+					'rule'        => 'settings_changed',
+					'severity'    => in_array( $item['rule'], Settings::RISKY_IGNORE, true ) ? Findings::MEDIUM : Findings::LOW,
+					'confidence'  => 'confirmed',
+					'basis'       => 'monitor',
+					'change_type' => 'changed',
+					'subject'     => __( 'Bee Monitor settings', 'bee-monitor' ),
+					/* translators: 1: username, 2: ignore rule. */
+					'reason'      => sprintf( __( '%1$s added the ignore rule "%2$s".', 'bee-monitor' ), wp_get_current_user()->user_login, $rule ),
+					'evidence'    => array( 'ignore_rule' => $rule ),
+					'key'         => md5( $rule ),
+				)
+			);
+		}
+		Findings::set_status( array( $id ), Findings::STATUS_IGNORED, $rule, get_current_user_id() );
+		/* translators: %s: ignore rule. */
+		$this->flash( 'success', sprintf( __( 'Ignore rule "%s" added.', 'bee-monitor' ), $rule ) );
+	}
+
+	/**
 	 * Handle bulk or single finding actions.
 	 */
 	public function handle_findings() {
@@ -662,6 +859,11 @@ final class Admin {
 		$note   = isset( $_POST['note'] ) ? sanitize_text_field( wp_unslash( $_POST['note'] ) ) : '';
 		$detail = isset( $_POST['return'] ) && 'detail' === sanitize_key( wp_unslash( $_POST['return'] ) );
 		$action = '';
+		if ( isset( $_POST['single_ignore'] ) && 1 === count( $ids ) ) {
+			$this->ignore_similar( $ids[0] );
+			wp_safe_redirect( self::page_url( 'bee-monitor', array( 'finding' => $ids[0] ) ) );
+			exit;
+		}
 		foreach ( array( 'expected', 'resolved', 'open' ) as $candidate ) {
 			if ( isset( $_POST[ 'single_' . $candidate ] ) ) {
 				$action = $candidate;
@@ -875,6 +1077,17 @@ final class Admin {
 		echo '<div class="bee-monitor-card"><h2>' . esc_html__( 'Email delivery', 'bee-monitor' ) . '</h2>';
 		/* translators: %s: recipients. */
 		echo '<p>' . esc_html( sprintf( __( 'Alerts go to: %s', 'bee-monitor' ), implode( ', ', Settings::recipients() ) ) ) . '</p>';
+		if ( count( Settings::recipients() ) > 1 ) {
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '"><input type="hidden" name="action" value="bee_monitor_email"><input type="hidden" name="op" value="test_one">';
+			wp_nonce_field( 'bee_monitor_email' );
+			echo '<p><label for="bee-monitor-test-one">' . esc_html__( 'Test one recipient', 'bee-monitor' ) . '</label> <select id="bee-monitor-test-one" name="recipient">';
+			foreach ( Settings::recipients() as $email ) {
+				printf( '<option value="%1$s">%2$s</option>', esc_attr( $email ), esc_html( $email ) );
+			}
+			echo '</select> ';
+			submit_button( __( 'Send test', 'bee-monitor' ), 'secondary', 'submit', false );
+			echo '</p></form>';
+		}
 		foreach ( array(
 			'test'   => __( 'Send test email', 'bee-monitor' ),
 			'sample' => __( 'Send sample alert', 'bee-monitor' ),
@@ -887,6 +1100,9 @@ final class Admin {
 		}
 		echo '<p class="description">' . esc_html__( 'The sample alert uses the real alert format with a clearly labeled fake finding.', 'bee-monitor' ) . '</p></div>';
 		echo '</div>';
+		echo '<details class="bee-monitor-preview"><summary>' . esc_html__( 'Preview the HTML alert email', 'bee-monitor' ) . '</summary>';
+		echo wp_kses( Notifier::preview_html(), Notifier::allowed_email_html() );
+		echo '</details>';
 
 		echo '<h2>' . esc_html__( 'Status', 'bee-monitor' ) . '</h2><table class="widefat striped bee-monitor-detail"><tbody>';
 		foreach ( $this->status_rows() as $label => $value ) {
@@ -970,6 +1186,14 @@ final class Admin {
 		if ( 'sample' === $op ) {
 			$ok = Notifier::send_sample();
 			$this->flash( $ok ? 'success' : 'error', $ok ? __( 'Sample Bee Monitor alert sent. Check your inbox and spam folder.', 'bee-monitor' ) : __( 'The sample alert could not be sent. See the status table for the error.', 'bee-monitor' ) );
+		} elseif ( 'test_one' === $op ) {
+			$to  = isset( $_POST['recipient'] ) ? sanitize_email( wp_unslash( $_POST['recipient'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified in guard().
+			$res = in_array( $to, Settings::recipients(), true ) ? Notifier::send_test( $to ) : array(
+				'ok'    => false,
+				'error' => __( 'That address is not a configured recipient.', 'bee-monitor' ),
+			);
+			/* translators: %s: error message. */
+			$this->flash( $res['ok'] ? 'success' : 'error', $res['ok'] ? __( 'Bee Monitor test email sent. Check your inbox and spam folder.', 'bee-monitor' ) : sprintf( __( 'Bee Monitor test email failed: %s', 'bee-monitor' ), $res['error'] ) );
 		} else {
 			$res = Notifier::send_test();
 			/* translators: %s: error message. */
@@ -1000,9 +1224,10 @@ final class Admin {
 	 * Page header.
 	 *
 	 * @param string $title Title.
+	 * @param string $cap   Required capability (defaults to manage).
 	 */
-	private function header( $title ) {
-		if ( ! current_user_can( self::capability() ) ) {
+	private function header( $title, $cap = '' ) {
+		if ( ! current_user_can( '' !== $cap ? $cap : self::capability() ) ) {
 			wp_die( esc_html__( 'You do not have permission to manage Bee Monitor.', 'bee-monitor' ), '', array( 'response' => 403 ) );
 		}
 		echo '<div class="wrap bee-monitor"><h1>' . esc_html( $title ) . '</h1>';

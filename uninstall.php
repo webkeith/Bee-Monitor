@@ -22,7 +22,7 @@ if ( ! is_array( $bee_monitor_settings ) || empty( $bee_monitor_settings['delete
 }
 
 global $wpdb;
-foreach ( array( 'baseline', 'findings', 'log' ) as $bee_monitor_table ) {
+foreach ( array( 'baseline', 'findings', 'log', 'deliveries' ) as $bee_monitor_table ) {
 	$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $wpdb->base_prefix . 'bee_monitor_' . $bee_monitor_table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.SchemaChange
 }
 
